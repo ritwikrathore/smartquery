@@ -703,42 +703,10 @@ def main():
         st.session_state.last_result = None
         logger.info("Initialized last_result in session state.")
 
-    # --- Sidebar ---
-    with st.sidebar:
-        st.title("SmartStack")
-        st.write("Tools:")
-
-    
-        st.markdown("**/ 🔍 SmartQuery** (Current)") # Indicate current page
-
-        st.divider()
-        st.markdown("### About")
-        st.info("Query your database using natural language and generate visualizations with AI assistance powered by Google Gemini.")
-
-        st.markdown('---')
-        st.warning('*AI-generated responses may contain inaccuracies. Always verify critical information.*')
-
-        # Clear Chat Button
-        if st.button("Clear Chat History", key="clear_chat"):
-            st.session_state.chat_history = []
-            st.session_state.conversation_context = []
-            st.session_state.last_result = None # Reset last_result
-            logger.info("Chat history, context, and last_result cleared.")
-            st.rerun()
-
-        # Logo - Adjusted path for single file structure
-        st.markdown("---")
-        # Assumes 'assets' folder is in the same directory as app.py
-        logo_path = Path(__file__).parent / "assets" / "ifcontrollers.png"
-        if logo_path.exists():
-            st.image(str(logo_path), use_container_width=True)
-        else:
-            logger.warning(f"Logo file not found at expected path: {logo_path}")
-            st.caption("IFC Controllers Logo")
-
     # --- Main Page Content ---
     st.markdown('<h1 style="text-align: center;"><span style="color: #00ade4;">SmartQuery</span></h1>', unsafe_allow_html=True)
     st.markdown("<h5 style='text-align: center; color: #555;'>AI-Powered Database Analysis with Google Gemini</h5>", unsafe_allow_html=True)
+
 
     # --- CSS Styles ---
     st.markdown("""
@@ -748,28 +716,28 @@ def main():
             flex-grow: 1; /* Allow chat to take available space */
             display: flex;
             flex-direction: column;
-            height: calc(100vh - 250px); /* Adjust height based on surrounding elements */
+            height: calc(20vh - 250px); /* Adjust height based on surrounding elements */
             overflow: hidden; /* Hide main container overflow */
-            margin-top: 1rem;
+            margin-top: 0.5rem; /* Reduce top margin from 1rem to 0.5rem */
         }
         /* Make message container scrollable */
         .chat-messages-container {
             flex-grow: 1;
             overflow-y: auto; /* Enable vertical scrolling */
-            padding: 0 1rem 1rem 1rem; /* Add some padding */
-            margin-bottom: 70px; /* Space for the input box */
+            padding: 0 1rem 0.5rem 1rem; /* Reduce bottom padding from 1rem to 0.5rem */
+            margin-bottom: 60px; /* Reduce space for the input box from 70px to 60px */
         }
         /* Sticky input - default Streamlit behavior is usually good */
         /* .stChatInputContainer */
 
         /* Feature boxes */
-        .features-container { display: flex; flex-direction: column; gap: 0.75rem; margin: 1rem auto; max-width: 1000px; }
+        .features-container { display: flex; flex-direction: column; gap: 0.75rem; margin: 0.5rem auto; max-width: 1000px; } /* Reduced margin from 1rem to 0.5rem */
         .features-row { display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; /* Allow wrapping on smaller screens */ }
         .feature-text { flex: 1 1 300px; /* Flex grow, shrink, basis */ max-width: 450px; padding: 1rem; background: #f0f8ff; border: 1px solid #e0e0e0; border-radius: 8px; font-size: .9rem; line-height: 1.4; display: flex; align-items: flex-start; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .check-icon { width: 18px; height: 18px; object-fit: contain; margin-top: 0.15rem; flex-shrink: 0; }
 
         /* Example queries */
-        .example-queries { margin: 1.5rem 0 1rem 0; font-size: 1rem; border-left: 3px solid #00ade4; padding-left: 1rem; }
+        .example-queries { margin: 1rem 0 0.75rem 0; font-size: 1rem; border-left: 3px solid #00ade4; padding-left: 1rem; } /* Reduced top margin from 1.5rem to 1rem, bottom from 1rem to 0.75rem */
         .example-queries p { margin-bottom: 0.5rem; font-weight: bold; color: #002345; }
         .example-queries ul { margin: 0; padding-left: 1.2rem; list-style-type: '→ '; }
         .example-queries li { margin-bottom: 0.3rem; color: #333; font-size: 0.9em; }
@@ -777,12 +745,8 @@ def main():
         /* DataFrame display */
         .stDataFrame { width: 100%; font-size: 0.9em; }
 
-        /* Mascot styling */
-        .mascot-container { position: fixed; bottom: 10px; right: 10px; width: 150px; /* Smaller */ height: auto; z-index: 0; pointer-events: none; opacity: 0.6; /* Less intrusive */ transition: opacity 0.3s ease; }
-        .mascot-container:hover { opacity: 0.8; } /* Slightly more visible on hover near it */
-
         /* Improve chat message appearance */
-        .stChatMessage { border-radius: 10px; border: 1px solid #eee; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .stChatMessage { border-radius: 10px; border: 1px solid #eee; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-top: 0.25rem; } /* Added smaller top margin */
         /* Adjust code block styling */
         .stCodeBlock { font-size: 0.85em; }
 
@@ -807,7 +771,7 @@ def main():
         </div>
     </div>
     """, unsafe_allow_html=True)
-
+    st.markdown("Dataset representing IFC's investment portfolio. https://financesone.worldbank.org/summaries/ifc")
     # --- Example Queries ---
     st.markdown("""
     <div class="example-queries">
@@ -822,16 +786,13 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # --- Background Mascot ---
-    # Adjusted path for single file structure
-    mascot_path = Path(__file__).parent / "assets" / "smartquerymascot.png"
-    if mascot_path.exists():
-        mascot_base64 = get_base64_encoded_image(str(mascot_path))
-        if mascot_base64:
-            st.markdown(
-                f'<div class="mascot-container"><img src="data:image/png;base64,{mascot_base64}" alt="SmartQuery Mascot"></div>',
-                unsafe_allow_html=True
-            )
+        # Clear Chat Button (moved from sidebar)
+    if st.button("Clear Chat History", key="clear_chat"):
+        st.session_state.chat_history = []
+        st.session_state.conversation_context = []
+        st.session_state.last_result = None # Reset last_result
+        logger.info("Chat history, context, and last_result cleared.")
+        st.rerun()
 
     # --- Chat Interface --- #
     st.markdown('<div class="main-chat-container">', unsafe_allow_html=True)
