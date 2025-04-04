@@ -80,8 +80,6 @@ Try it out at: https://smartquery.streamlit.app/
 - `app.py`: Main application file
 - `assets/`: Contains static assets and database
   - `data1.sqlite`: Default SQLite database
-  - `smartquerymascot.png`: Application mascot/logo
-  - `ifcontrollers.png`: Company logo
   - `correct.png`: UI element for feature highlights
 
 ## Troubleshooting
