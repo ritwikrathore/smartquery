@@ -80,8 +80,6 @@ Try it out at: https://smartquery.streamlit.app/
 - `app.py`: Main application file
 - `assets/`: Contains static assets and database
   - `data1.sqlite`: Default SQLite database
-  - `smartquerymascot.png`: Application mascot/logo
-  - `ifcontrollers.png`: Company logo
   - `correct.png`: UI element for feature highlights
 
 ## Troubleshooting
@@ -91,9 +89,10 @@ Try it out at: https://smartquery.streamlit.app/
 - **Visualization Errors**: Check that matplotlib and its dependencies are properly installed
 
 ## License
+
 # Creative Commons Attribution-NonCommercial 1.0
 
- CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE LEGAL SERVICES. DISTRIBUTION OF THIS DRAFT LICENSE DOES NOT CREATE AN ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES REGARDING THE INFORMATION PROVIDED, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM ITS USE.
+CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE LEGAL SERVICES. DISTRIBUTION OF THIS DRAFT LICENSE DOES NOT CREATE AN ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES REGARDING THE INFORMATION PROVIDED, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM ITS USE.
 
 License
 
