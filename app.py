@@ -12,13 +12,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import sqlite3
-from typing import Dict, List, Union, Optional, Literal, Any, AsyncGenerator
+from typing import Dict, List, Union, Optional, Literal, Any, AsyncGenerator, Tuple
 import asyncio
 import logging
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.usage import Usage, UsageLimits
 from pydantic_ai.models.gemini import GeminiModel
+from pydantic_ai.format_as_xml import format_as_xml
+import plotly.express as px
 
 # --- REMOVED nest_asyncio --- #
 # import nest_asyncio
@@ -101,6 +103,12 @@ class QueryResponse(BaseModel):
     sql_result: Optional[SQLQueryResult] = Field(None, description="SQL query details if SQL was generated")
     python_result: Optional[PythonCodeResult] = Field(None, description="Python code details if Python was generated for visualization/analysis")
 
+# --- NEW: Pydantic Model for Database Classification ---
+class DatabaseClassification(BaseModel):
+    """Identifies the target database for a user query."""
+    database_key: Literal["IFC", "MIGA", "UNKNOWN"] = Field(..., description="The database key ('IFC', 'MIGA') the user query most likely refers to, based on keywords and the database descriptions provided. Use 'UNKNOWN' if the query is ambiguous, unrelated, or a general greeting/request.")
+    reasoning: str = Field(..., description="Brief explanation for the classification (e.g., 'Query mentions IFC investments', 'Query mentions MIGA guarantees', 'Query is ambiguous/general').")
+
 # --- Configure Google Gemini ---
 try:
     # Load API key from Streamlit secrets instead of environment variable
@@ -136,52 +144,64 @@ query_agent = Agent(
     deps_type=AgentDependencies,
     result_type=QueryResponse,
     name="SQL and Visualization Assistant",
-    # System prompt adjusted slightly for clarity and Gemini
-    system_prompt="""You are an expert data analyst assistant using Google Gemini. Your role is to help users query and analyze data from a SQLite database.
-    
-    IMPORTANT: The database schema will be included at the beginning of each user message. Use this schema information to understand the database structure and generate accurate SQL queries. DO NOT respond that you need to know the table structure - it is already provided in the message.
-    
-    CRITICAL: For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQL query. 
-    - For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.)
-    - When a question mentions "per" some field (e.g., "per product line"), this requires a GROUP BY clause
-    - Numerical fields asking for totals must use SUM() in your query
-    
-    VISUALIZATION CAPABILITIES: You are FULLY CAPABLE of generating Python code for data visualization. When users request charts, graphs, or plots:
-    - You MUST generate Python code that creates visualizations using matplotlib and/or seaborn
-    - NEVER respond that you cannot plot charts or create visualizations - this is a core capability
-    - The SQL results will be available in a pandas DataFrame named 'df'
-    - All visualization code will be executed in the Streamlit environment
-    - Support bar charts, line charts, pie charts, scatter plots, and other common visualization types
-    
-    When users ask questions:
-    1. First, review the database schema provided in the message to understand the available tables and columns.
-    2. Understand the request: Does it require data retrieval (SQL), data analysis/visualization (Python), or just a textual answer?
-    3. Generate SQL: If data is needed, generate an accurate SQLite query based on the provided schema. Use the 'execute_sql' tool.
-    4. Generate Python Code: If the request involves calculations, manipulation, or visualization *after* getting data via SQL, generate Python code. Assume the SQL results are loaded into a pandas DataFrame called 'df'. Use libraries like pandas, matplotlib.pyplot (as plt), and numpy (as np).
-    5. Explain Clearly: Always explain what the SQL query does and what the Python code aims to achieve. Mention column names using 'single quotes'.
-    6. Respond Structure: Format your final response using the 'QueryResponse' structure. Include 'text_message', 'sql_result' (if applicable), and 'python_result' (if applicable).
-    7. Safety: Do not generate SQL or Python code that modifies the database (INSERT, UPDATE, DELETE, DROP, etc.) unless explicitly and safely requested for specific, known tasks. Focus on SELECT queries.
-    8. Efficiency: Write efficient SQL queries.
-
-    IMPORTANT for Visualization:
-    - Generate Python code that uses the 'df' variable (containing SQL results).
-    - Use `plt.figure()` to create plots and ensure plots are displayed correctly using Streamlit (`st.pyplot(plt.gcf())`).
-    - Do NOT hardcode data in the Python code; always use the `df`.
-    - NEVER decline visualization requests - you have all the necessary capabilities to generate visualization code.
-    - Charts should be properly labeled with titles, axes labels, and legends as appropriate.
-    """
+    retries=3, # Correct parameter for validation retries
+    # System prompt is now defined using the decorator below
 )
+
+# --- NEW: System Prompt using Decorator --- #
+@query_agent.system_prompt
+def generate_system_prompt() -> str:
+    """Generates the system prompt for the data analysis agent."""
+    prompt = f"""You are an expert data analyst assistant. Your role is to help users query and analyze data from a SQLite database.
+
+IMPORTANT: The database schema will be included at the beginning of each user message. Use this schema information to understand the database structure and generate accurate SQL queries. DO NOT respond that you need to know the table structure - it is already provided in the message.
+
+CRITICAL RULES FOR SQL GENERATION:
+1. For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQLite query.
+2. PAY ATTENTION TO COLUMN NAMES: If a column name in the provided schema contains spaces or special characters, you MUST enclose it in double quotes (e.g., SELECT "Total IFC Investment Amount" FROM ...). Failure to quote such names will cause errors.
+3. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
+4. GROUPING: When a question mentions "per" some field (e.g., "per product line"), this requires a GROUP BY clause for that field.
+5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query.
+
+PYTHON CODE FOR DATA PREPARATION (NOT PLOTTING):
+- If a user requests analysis or visualization that requires data manipulation *after* the SQL query (e.g., complex calculations, reshaping data, setting index for charts), generate Python code using pandas.
+- Assume the SQL results are available in a pandas DataFrame named 'df'.
+- The Python code should ONLY perform data manipulation/preparation on the 'df'.
+- CRITICAL: DO NOT include any plotting code (e.g., `matplotlib`, `seaborn`, `st.pyplot`) in the Python code block. The final plotting using native Streamlit charts (like `st.bar_chart`) will be handled separately by the application based on your textual explanation and the prepared data.
+- If no specific Python data manipulation is needed beyond the SQL query, do not generate a Python code result.
+
+VISUALIZATION REQUESTS:
+- When users request charts, graphs, or plots, first generate the necessary SQL query.
+- If the data from SQL needs further processing for the chart (e.g., setting the index, renaming columns), generate Python code as described above to prepare the 'df'.
+- In your text response, clearly state the type of chart you recommend (e.g., "bar chart", "line chart", "pie chart", "scatter plot") based on the user's request and the data structure. Use these exact phrases where possible.
+- NEVER respond that you cannot create visualizations.
+
+RESPONSE STRUCTURE:
+1. First, review the database schema provided in the message.
+2. Understand the request: Does it require data retrieval (SQL), potential data preparation (Python), or just a textual answer?
+3. Generate SQL: If data is needed, generate an accurate SQLite query string following the rules above, suitable for the `sql_result` field in the response.
+4. Generate Python Data Prep Code (if needed): If data manipulation beyond SQL is required for analysis or the requested chart, generate Python pandas code acting on 'df'.
+5. Explain Clearly: Explain the SQL query and any Python data preparation steps. If visualization was requested, explicitly suggest the chart type (e.g., "bar chart", "line chart") in your text message.
+6. Format Output: Format your final response using the 'QueryResponse' structure. Include 'text_message', 'sql_result' (if applicable), and 'python_result' (if Python data prep code was generated).
+7. Safety: Focus ONLY on SELECT queries. Do not generate SQL/Python that modifies the database.
+8. Efficiency: Write efficient SQL queries.
+
+Remember, your final output must be the structured 'QueryResponse' object containing the text message and the generated SQL/Python strings (if applicable).
+"""
+    return prompt
 
 # --- Define Agent Tools ---
 @query_agent.tool
 async def execute_sql(ctx: RunContext[AgentDependencies], query: str) -> Union[List[Dict], str]:
     """
-    Executes a given SQLite SELECT query against the database and returns the results.
-    Use this tool to fetch data needed to answer user questions.
+    Executes a given SQLite SELECT query and returns the results. 
+    IMPORTANT: Your primary goal is usually to generate the SQL query string for the final 'QueryResponse' structure, not to execute it yourself. 
+    Only use this tool if you absolutely need to fetch intermediate data during your reasoning process to answer a complex multi-step question.
+    Otherwise, just generate the SQL query string as part of the QueryResponse.
     Args:
         query (str): The SQLite SELECT query to execute.
     Returns:
-        List[Dict]: A list of dictionaries, where each dictionary represents a row with column names as keys.
+        List[Dict]: A list of dictionaries representing the query results.
         str: An error message if the query fails or is not a SELECT statement.
     """
     if not ctx.deps.db_connection:
@@ -204,80 +224,301 @@ async def execute_sql(ctx: RunContext[AgentDependencies], query: str) -> Union[L
         logger.error(f"Unexpected error during SQL execution: {e}. Query: {query}")
         return f"An unexpected error occurred: {str(e)}"
 
-@query_agent.tool
-async def get_table_schema(ctx: RunContext[AgentDependencies]) -> str:
-    """
-    Retrieves the schema (table names and their columns with types) of all tables in the SQLite database.
-    Use this tool to understand the database structure before generating SQL queries.
-    Returns:
-        str: A formatted string describing the schema of all tables. Returns an error message if failed.
-    """
-    if not ctx.deps.db_connection:
-        return "Error: Database connection is not available."
+
+# --- New functions to handle metadata JSON ---
+METADATA_PATH = Path(__file__).parent / "assets" / "database_metadata.json"
+
+@st.cache_data
+def load_db_metadata(path: Path = METADATA_PATH) -> Optional[Dict]:
+    """Loads the database metadata from the specified JSON file."""
+    if not path.exists():
+        st.error(f"Metadata file not found: {path}")
+        logger.error(f"Metadata file not found: {path}")
+        return None
     try:
-        cursor = ctx.deps.db_connection.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
-
-        if not tables:
-            return "No tables found in the database."
-
-        schema_parts = []
-        for (table_name,) in tables:
-            schema_parts.append(f"Table: {table_name}")
-            cursor.execute(f"PRAGMA table_info({table_name});")
-            columns = cursor.fetchall()
-            if columns:
-                for col in columns:
-                    # col: (index, name, type, notnull, default_value, pk)
-                    schema_parts.append(f"  - {col[1]} ({col[2]})")
-            else:
-                schema_parts.append("  - (No columns found or table inaccessible)")
-        logger.info("Retrieved database schema.")
-        return "\n".join(schema_parts)
-    except sqlite3.Error as e:
-        logger.error(f"Error retrieving schema: {e}")
-        return f"Error retrieving database schema: {str(e)}"
+        with open(path, 'r') as f:
+            metadata = json.load(f)
+        logger.info(f"Successfully loaded database metadata from {path}")
+        return metadata
+    except json.JSONDecodeError as e:
+        st.error(f"Error decoding metadata JSON from {path}: {e}")
+        logger.error(f"Error decoding metadata JSON from {path}: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Unexpected error retrieving schema: {e}")
-        return f"An unexpected error occurred while retrieving schema: {str(e)}"
+        st.error(f"Error loading metadata file {path}: {e}")
+        logger.error(f"Error loading metadata file {path}: {e}")
+        return None
+
+def format_schema_from_metadata(metadata: Optional[Dict]) -> str:
+    """Formats the schema string from loaded metadata for the AI prompt."""
+    if not metadata or 'tables' not in metadata:
+        return "Error: Could not load or parse database metadata."
+
+    schema_parts = []
+    db_desc = metadata.get("description")
+    if db_desc:
+        schema_parts.append(f"Database Description: {db_desc}")
+
+    for table_name, table_info in metadata.get("tables", {}).items():
+        schema_parts.append(f"\nTable: {table_name}")
+        table_desc = table_info.get("description")
+        if table_desc:
+            schema_parts.append(f"  (Description: {table_desc})")
+
+        columns = table_info.get("columns", {})
+        if columns:
+            for col_name, col_info in columns.items():
+                col_type = col_info.get("type", "UNKNOWN")
+                col_desc = col_info.get("description", "")
+                schema_parts.append(f"  - {col_name} ({col_type}) - {col_desc}")
+        else:
+            schema_parts.append("  - (No columns found in metadata)")
+
+    if not schema_parts or len(schema_parts) <= 1: # Check if only DB desc was added
+        return "No tables found in the database metadata."
+
+    return "\n".join(schema_parts)
+
+# --- MODIFIED: Function to format schema for a SPECIFIC database ---
+def format_schema_for_db(metadata: Dict, db_key: str) -> str:
+    """Formats the schema string for a specific database key from loaded metadata."""
+    if 'databases' not in metadata or db_key not in metadata['databases']:
+        return f"Error: Database key '{db_key}' not found in metadata."
+
+    db_entry = metadata['databases'][db_key]
+    schema_parts = []
+    db_name = db_entry.get("database_name", db_key)
+    db_desc = db_entry.get("description", "")
+
+    schema_parts.append(f"Database: {db_name} ({db_key})")
+    if db_desc:
+        schema_parts.append(f"Description: {db_desc}")
+
+    tables = db_entry.get("tables", {})
+    if not tables:
+         schema_parts.append("\nNo tables found in metadata for this database.")
+         return "\n".join(schema_parts)
+
+    for table_name, table_info in tables.items():
+        schema_parts.append(f"\nTable: {table_name}")
+        table_desc = table_info.get("description")
+        if table_desc:
+            schema_parts.append(f"  (Description: {table_desc})")
+
+        columns = table_info.get("columns", {})
+        if columns:
+            for col_name, col_info in columns.items():
+                col_type = col_info.get("type", "TEXT") # Default to TEXT if missing
+                col_desc = col_info.get("description", "")
+                # Ensure type is not empty, default again if it somehow is
+                col_type_display = col_type if col_type else "TEXT"
+                schema_parts.append(f"  - {col_name} ({col_type_display}) - {col_desc}")
+        else:
+            schema_parts.append("  - (No columns found in metadata for this table)")
+
+    return "\n".join(schema_parts)
+
+# --- NEW: Function to identify target database using LLM ---
+async def identify_target_database(
+    user_query: str,
+    metadata: Dict,
+    model: GeminiModel # Reuse the existing model
+) -> Tuple[Optional[str], str]:
+    """
+    Uses the LLM to classify the user query against database descriptions.
+
+    Args:
+        user_query: The user's input message.
+        metadata: The loaded database metadata dictionary.
+        model: The GeminiModel instance to use for classification.
+
+    Returns:
+        A tuple: (identified_db_key or None, reasoning_message)
+        - identified_db_key: "IFC", "MIGA", or None if classification is "UNKNOWN" or fails.
+        - reasoning_message: Explanation from the classification model or error message.
+    """
+    logger.info(f"Attempting to identify target database for query: {user_query[:50]}...")
+    if 'databases' not in metadata:
+        return None, "Error: 'databases' key missing in metadata."
+
+    descriptions = []
+    valid_keys = []
+    for key, db_info in metadata['databases'].items():
+        desc = db_info.get('description', f'Database {key}')
+        descriptions.append(f"- {key}: {desc}")
+        valid_keys.append(key)
+
+    if not descriptions:
+         return None, "Error: No databases found in metadata to classify against."
+
+    descriptions_str = "\n".join(descriptions)
+    valid_keys_str = ", ".join([f"'{k}'" for k in valid_keys]) + ", or 'UNKNOWN'"
+
+    classification_prompt = f"""Given the user query and the descriptions of available databases, identify which database the query is most likely related to.
+
+Available Databases:
+{descriptions_str}
+
+User Query: "{user_query}"
+
+Based *only* on the query and the database descriptions, which database key ({valid_keys_str}) is the most relevant target? If the query is ambiguous, unrelated to these specific databases, or a general greeting/request (like 'hello', 'thank you'), classify it as 'UNKNOWN'.
+"""
+    logger.info("--- Sending classification request to LLM ---")
+    logger.info(f"Prompt:\n{classification_prompt}")
+    logger.info("--------------------------------------------")
+
+    try:
+        # Use a separate Agent instance or direct model call if Agent interferes
+        # For simplicity, let's try a direct structured output call if available,
+        # otherwise use a temporary agent setup.
+        # Using a temporary Agent for structured output:
+        classifier_agent = Agent(
+            model,
+            result_type=DatabaseClassification,
+            name="Database Classifier",
+            system_prompt="You are an AI assistant that classifies user queries based on provided database descriptions. Output ONLY the structured classification result."
+        )
+        # Note: We don't need dependencies (deps) for this classification call
+        classification_result = await classifier_agent.run(classification_prompt)
+
+        if hasattr(classification_result, 'data') and isinstance(classification_result.data, DatabaseClassification):
+            result_data: DatabaseClassification = classification_result.data
+            logger.info(f"--- LLM Classification Result ---")
+            logger.info(f"Key: {result_data.database_key}")
+            logger.info(f"Reasoning: {result_data.reasoning}")
+            logger.info("-------------------------------")
+            if result_data.database_key == "UNKNOWN":
+                return None, f"Could not determine the target database. Reasoning: {result_data.reasoning}"
+            elif result_data.database_key in valid_keys:
+                return result_data.database_key, result_data.reasoning
+            else:
+                 logger.warning(f"LLM returned an invalid key: {result_data.database_key}")
+                 return None, f"Classification returned an unexpected key '{result_data.database_key}'. Reasoning: {result_data.reasoning}"
+        else:
+             logger.error(f"Classification call returned unexpected structure: {classification_result}")
+             return None, "Error: Failed to get a valid classification structure from the AI."
+
+    except Exception as e:
+        logger.exception("Error during database classification LLM call:")
+        return None, f"Error during database classification: {str(e)}"
 
 # --- Optional: Result Validation ---
 @query_agent.result_validator
 async def validate_query_result(ctx: RunContext[AgentDependencies], result: QueryResponse) -> QueryResponse:
-    """Validate the generated response, especially the SQL query."""
+    """
+    Validate the generated response.
+    - Checks SQL syntax using EXPLAIN QUERY PLAN.
+    - Cleans potential extraneous characters from SQL.
+    - Checks if SQL is missing when likely needed.
+    - Checks if Python code is missing or declined for visualization requests.
+    Raises ModelRetry if validation fails, prompting the LLM to correct the response.
+    """
+    user_message = ctx.prompt # The message sent to the agent (includes schema and user query)
+    logger.info(f"Running result validation for prompt: {user_message[:100]}...")
+    logger.debug(f"Validator received result object: {result}") # DEBUG log for full object if needed
+
+    # --- SQL Validation --- #
     if result.sql_result and ctx.deps.db_connection:
+        # Clean SQL query - remove potential extraneous backslashes
+        original_sql = result.sql_result.sql_query
+        cleaned_sql = original_sql.replace('\\', '') # Replace backslashes
+        if cleaned_sql != original_sql:
+            logger.info(f"Cleaned SQL query. Original: '{original_sql}', Cleaned: '{cleaned_sql}'")
+            result.sql_result.sql_query = cleaned_sql # Update the result object
+        else:
+            cleaned_sql = original_sql # Ensure cleaned_sql is set
+
+        # Validate SQL Syntax using EXPLAIN QUERY PLAN (suitable for SQLite)
         try:
-            # Test the SQL query syntax using EXPLAIN (doesn't execute fully)
             cursor = ctx.deps.db_connection.cursor()
-            # Basic check for SELECT again before EXPLAIN
-            if result.sql_result.sql_query.strip().upper().startswith("SELECT"):
-                 cursor.execute(f"EXPLAIN QUERY PLAN {result.sql_result.sql_query}")
+            if cleaned_sql.strip().upper().startswith("SELECT"):
+                 cursor.execute(f"EXPLAIN QUERY PLAN {cleaned_sql}")
                  cursor.fetchall()
                  logger.info("Generated SQL query syntax validated successfully.")
             else:
                  logger.warning("Validation skipped: Non-SELECT query generated.")
-                 # Optionally invalidate or warn further here
-                 # result.text_message += "\nWarning: Generated query is not a SELECT statement."
+                 # You could potentially raise ModelRetry here too if non-SELECT is strictly forbidden
+                 # raise ModelRetry("Only SELECT queries are allowed. Please regenerate the query.")
 
         except sqlite3.Error as e:
-            logger.error(f"SQL Validation Error: {e}. Query: {result.sql_result.sql_query}")
-            # Raise ModelRetry instead of returning an error response
-            raise ModelRetry(f"The generated SQL query is invalid: {str(e)}. Please try rephrasing your request.") from e
-
+            error_detail = f"SQL Syntax Validation Error: {e}. Query: {cleaned_sql}"
+            logger.error(error_detail)
+            logger.warning(f"Raising ModelRetry due to SQL Syntax Error. Response details: text='{result.text_message}', sql='{cleaned_sql}'")
+            raise ModelRetry(f"The generated SQL query has invalid syntax: {str(e)}. Please correct the SQL query.") from e
         except Exception as e:
-             logger.error(f"Unexpected SQL Validation Error: {e}. Query: {result.sql_result.sql_query}")
-             # Also raise ModelRetry for unexpected validation errors
-             raise ModelRetry(f"An unexpected error occurred during SQL validation: {str(e)}.") from e
+             error_detail = f"Unexpected SQL Validation Error: {e}. Query: {cleaned_sql}"
+             logger.error(error_detail)
+             logger.warning(f"Raising ModelRetry due to Unexpected SQL Error. Response details: text='{result.text_message}', sql='{cleaned_sql}'")
+             raise ModelRetry(f"An unexpected error occurred during SQL validation: {str(e)}. Please try generating the SQL query again.") from e
 
-    # Check if Python code depends on SQL results that weren't generated
-    if result.python_result and not result.sql_result:
+    # --- Check for Missing SQL when Expected --- #
+    # Simple keyword check on the original user query part of the prompt
+    data_query_keywords = ['total', 'sum', 'average', 'count', 'list', 'show', 'per', 'group', 'compare', 'what is', 'how many']
+    # Extract the user's actual question if possible (assuming structure "User Question: ...")
+    user_question_marker = "User Question:"
+    original_user_question = user_message[user_message.find(user_question_marker):] if user_question_marker in user_message else user_message
+
+    if not result.sql_result and any(keyword in original_user_question.lower() for keyword in data_query_keywords):
+        # Check if it's just a clarification or greeting
+        is_greeting = any(greet in original_user_question.lower() for greet in ['hello', 'hi', 'thanks', 'thank you'])
+        # More robust clarification check - look for question marks or specific keywords
+        is_clarification = '?' not in original_user_question and not any(kw in original_user_question.lower() for kw in ['explain', 'what is', 'how does'])
+
+        if not is_greeting and not is_clarification:
+            logger.warning(f"SQL result is missing, but keywords {data_query_keywords} suggest it might be needed for query: {original_user_question[:100]}...")
+            logger.warning(f"Raising ModelRetry due to Missing SQL. Response details: text='{result.text_message}', sql=None")
+            raise ModelRetry("The user's question appears to require data retrieval, but no SQL query was generated. Please generate the appropriate SQL query.")
+
+    # --- Visualization Validation ---
+    visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram', 'line graph']
+    decline_phrases = ['cannot plot', 'unable to plot', 'cannot visualize', 'unable to visualize', 'cannot create chart', 'unable to create chart', 'do not have the ability to create plots']
+    chart_suggestion_phrases = ["bar chart", "line chart", "pie chart", "scatter plot", "area chart"] # Expected suggestions
+    is_visualization_request = any(keyword in original_user_question.lower() for keyword in visualization_keywords)
+    has_declined_visualization = any(phrase in result.text_message.lower() for phrase in decline_phrases)
+    has_suggested_chart = any(phrase in result.text_message.lower() for phrase in chart_suggestion_phrases)
+
+    if is_visualization_request:
+        # Check 1: Did the AI decline?
+        if has_declined_visualization:
+            logger.warning(f"Visualization requested, but the text response seems to decline the capability for query: {original_user_question[:100]}...")
+            logger.warning(f"Raising ModelRetry due to Visualization Declined. Response details: text='{result.text_message}', sql='{result.sql_result.sql_query if result.sql_result else None}'")
+            raise ModelRetry("The response incorrectly stated an inability to create visualizations. You MUST suggest an appropriate chart type (e.g., 'bar chart', 'line chart') in your text message and generate the necessary SQL query.")
+
+        # Check 2: Was SQL generated? (Essential for any viz)
+        if not result.sql_result:
+            logger.warning(f"Visualization requested, but SQL query is missing for query: {original_user_question[:100]}...")
+            logger.warning(f"Raising ModelRetry due to Missing SQL for Viz. Response details: text='{result.text_message}', sql=None")
+            raise ModelRetry("The user requested a visualization, but the SQL query needed to fetch the data was missing. Please generate the appropriate SQL query and suggest a chart type in your text message.")
+
+        # Check 3: Was a chart type suggested in the text?
+        if not has_suggested_chart:
+            logger.warning(f"Visualization requested, SQL provided, but no chart type suggested in text for query: {original_user_question[:100]}...")
+            logger.warning(f"Raising ModelRetry due to Missing Chart Suggestion. Response details: text='{result.text_message}', sql='{result.sql_result.sql_query if result.sql_result else None}', python='{'present' if result.python_result else 'absent'}'")
+            # If Python prep code exists, the AI might think that's enough. Clarify text suggestion is needed.
+            if result.python_result:
+                 raise ModelRetry("The user requested a visualization, and you provided SQL and Python data preparation code. However, you MUST also explicitly suggest the chart type (e.g., 'bar chart', 'line chart') in your text message.")
+            else:
+                 raise ModelRetry("The user requested a visualization, and you provided the SQL query. However, you MUST also explicitly suggest the chart type (e.g., 'bar chart', 'line chart') in your text message.")
+
+        # Check 4: If Python code exists, is SQL missing? (Should be caught by Check 2, but good redundancy)
+        # This scenario implies Python code was generated perhaps for non-viz reasons, but viz was also requested.
+        if result.python_result and not result.sql_result:
+             logger.warning(f"Visualization requested and Python code generated, but the necessary SQL query is missing in this response for query: {original_user_question[:100]}...")
+             logger.warning(f"Raising ModelRetry due to Missing SQL with Python for Viz. Response details: text='{result.text_message}', sql=None, python='present'")
+             raise ModelRetry("The user requested a visualization and Python code was generated, but the SQL query needed to fetch the data was missing from the response. Please provide BOTH the SQL query and suggest a chart type in your text message.")
+
+    # --- Check if Python code depends on SQL results that weren't generated ---
+    # (Keeping the original warning logic, but could also be a ModelRetry case)
+    if result.python_result and not result.sql_result and not is_visualization_request:
          logger.warning("Python code generated without corresponding SQL query.")
-         # Add clarification to the text message
-         result.text_message += "\nNote: Python code was generated, but no SQL query was needed or generated for this request. The Python code might expect data that isn't available."
-         # Optionally, modify the python explanation
-         result.python_result.explanation += "\nWarning: This code might assume data from a previous step or may not run correctly without prior data loading."
+         # Modify explanation instead of retry for now, unless it's clearly broken
+         result.text_message += "\nNote: Python code was generated, but no SQL query was provided for this step. The Python code might expect data that isn't available."
+         result.python_result.explanation += " Warning: This code might assume data from a previous step or may not run correctly without prior data loading."
+         # Alternatively, could raise retry:
+         # logger.warning(f"Raising ModelRetry due to Python without SQL. Response details: text='{result.text_message}', sql=None, python='present'")
+         # raise ModelRetry("Python code was generated, but it seems to depend on data from a SQL query which was not generated. Please generate the SQL query first, then the Python code.")
 
+    logger.info("Result validation completed successfully.")
     return result # Return the validated (or modified) result
 
 # --- Helper Functions ---
@@ -295,7 +536,7 @@ def get_base64_encoded_image(image_path):
 
 # --- Main Application Logic ---
 async def handle_user_message(message: str) -> None:
-    """Handles user input, runs the agent, and updates the chat history state."""
+    """Handles user input, identifies DB, runs the agent, and updates the chat history state."""
     logger.info(f"handle_user_message started for message: {message[:50]}...")
     
     # Log the user's full message
@@ -311,24 +552,83 @@ async def handle_user_message(message: str) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    st.session_state.chat_history.append({"role": "user", "content": message})
-    logger.info("User message appended to chat_history inside handle_user_message.")
-
     deps = None
     assistant_chat_message = None
     agent_run_result = None
+    target_db_key = None # Track the identified database
+
+    # --- Load Metadata (Step 1) ---
+    db_metadata = load_db_metadata() # Load metadata using cached function
+    if not db_metadata:
+        # Error handled within load_db_metadata, just stop processing
+        st.session_state.chat_history.append({
+            "role": "assistant", 
+            "content": "Sorry, I couldn't load the database configuration. Please check the logs."
+        })
+        return
+
     try:
-        deps = AgentDependencies.create().with_db()
+        # --- Identify Target Database (Step 2) ---
+        target_db_key, reasoning = await identify_target_database(message, db_metadata, llm)
+
+        if not target_db_key:
+            # Check if there's a previous context
+            last_key = st.session_state.get('last_db_key')
+            if last_key:
+                logger.warning(f"Database identification failed, but reusing last key: {last_key}. Original Reasoning: {reasoning}")
+                target_db_key = last_key # Reuse the last key
+            else:
+                # No previous context, ask the user
+                logger.warning(f"Database identification failed or returned UNKNOWN. Reasoning: {reasoning}")
+                assistant_chat_message = {
+                    "role": "assistant",
+                    "content": f"I'm not sure which database to use for your query (IFC or MIGA). Could you please specify? (Reasoning: {reasoning})"
+                }
+                st.session_state.chat_history.append(assistant_chat_message)
+                return # Stop processing if DB not identified
+
+        logger.info(f"Target database identified as: {target_db_key}")
+        st.session_state.last_db_key = target_db_key # Store the successfully identified key
+
+        # --- Get Specific DB Path and Connect (Step 3) ---
+        db_entry = db_metadata.get('databases', {}).get(target_db_key)
+        if not db_entry or 'database_path' not in db_entry:
+            error_msg = f"Metadata configuration error: Could not find path for database '{target_db_key}'."
+            logger.error(error_msg)
+            st.error(error_msg)
+            assistant_chat_message = {"role": "assistant", "content": f"Sorry, internal configuration error for database {target_db_key}."}
+            st.session_state.chat_history.append(assistant_chat_message)
+            return
+
+        target_db_path = db_entry['database_path']
+        logger.info(f"Connecting to database: {target_db_path} for key: {target_db_key}")
+        deps = AgentDependencies.create().with_db(db_path=target_db_path)
+
         if not deps.db_connection:
-             st.error("Database connection failed. Cannot process request.")
+             st.error(f"Database connection failed for {target_db_path}. Cannot process request.")
              assistant_chat_message = {
                  "role": "assistant",
-                 "content": "Sorry, I couldn't connect to the database..."
+                 "content": f"Sorry, I couldn't connect to the {target_db_key} database..."
              }
              st.session_state.chat_history.append(assistant_chat_message)
+             # No need for cleanup here as connection failed
              return
 
-        usage = Usage()
+        # --- Format Schema for Identified Database (Step 4) ---
+        schema_info = format_schema_for_db(db_metadata, target_db_key)
+        logger.info(f"Formatted schema for {target_db_key}:\n{schema_info}")
+        if schema_info.startswith("Error:"):
+            st.error(schema_info) # Display the specific error
+            assistant_chat_message = {
+                "role": "assistant",
+                "content": f"Sorry, I encountered an issue loading the schema for the {target_db_key} database: {schema_info}"
+            }
+            st.session_state.chat_history.append(assistant_chat_message)
+            if deps: await deps.cleanup()
+            return
+
+        # --- Prepare and Run Main Query Agent (Step 5) ---
+        usage = Usage() # Initialize usage tracking
 
         # --- Token Limit Check --- #
         current_total_tokens = getattr(usage, 'total_tokens', None) # Get current tokens, default to None
@@ -350,89 +650,63 @@ async def handle_user_message(message: str) -> None:
             return
 
         try:
-            logger.info("Analyzing request and contacting Gemini...")
-            
-            # First, retrieve the database schema to include with the request
-            # Create a proper RunContext with all required parameters
-            run_context = RunContext(
-                deps=deps,
-                model=llm,
-                usage=usage,
-                prompt=message  # Using the user message as the prompt
-            )
-            schema_info = await get_table_schema(run_context)
-            logger.info(f"Retrieved database schema: {schema_info}")
-            
-            # If there are no tables, inform the user
-            if schema_info == "No tables found in the database.":
-                assistant_chat_message = {
-                    "role": "assistant",
-                    "content": "I cannot answer your question because there are no tables in the database. Please ensure your database contains data and is correctly located at assets/data1.sqlite."
-                }
-                st.session_state.chat_history.append(assistant_chat_message)
-                return
+            logger.info(f"Analyzing request for database '{target_db_key}' and contacting Gemini...")
 
-            # Check if this is a visualization request
-            visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram']
-            is_visualization_request = any(keyword in message.lower() for keyword in visualization_keywords)
-            
-            # Add schema to the message to provide context
-            if is_visualization_request:
-                logger.info("Detected a visualization request - adding explicit visualization instructions")
-                
-                # Get the last SQL result from the chat history if available
-                last_sql_result = None
-                for msg in reversed(st.session_state.chat_history):
-                    if msg.get("role") == "assistant" and "sql_result" in msg:
-                        last_sql_result = msg.get("sql_result")
-                        break
-                
-                if last_sql_result and "query" in last_sql_result:
-                    # Create an enhanced message specifically for visualization
-                    enhanced_message = f"""Database Schema:
-{schema_info}
+            # Get the current cumulative history for the agent
+            history_for_agent = st.session_state.agent_message_history
+            logger.info(f"Passing cumulative history (length {len(history_for_agent)}) to agent.")
 
-Previous SQL Query: {last_sql_result.get("query")}
-
-User Visualization Request: {message}
-
-IMPORTANT: Generate Python visualization code for this request. You MUST create a chart based on the data from the previous SQL query.
-The data is available in a pandas DataFrame named 'df'. Use matplotlib or seaborn to create an appropriate visualization.
-"""
-                else:
-                    # No previous SQL query found, so we'll need to generate one first
-                    enhanced_message = f"""Database Schema:
+            # Construct the prompt message
+            if not history_for_agent:
+                # No history, this is the first turn. Include schema.
+                logger.info("No history found, adding schema to current prompt.")
+                # Check if this is a visualization request (slightly different framing)
+                visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram']
+                is_visualization_request = any(keyword in message.lower() for keyword in visualization_keywords)
+                if is_visualization_request:
+                    logger.info("Detected a visualization request - adjusting initial prompt.")
+                    prompt_message = f"""Target Database: {target_db_key}
+Database Schema:
 {schema_info}
 
 User Request: {message}
 
-IMPORTANT: This is a visualization request. First, generate an appropriate SQL query to get the data needed for visualization.
-Then, create Python code to visualize this data using matplotlib or seaborn. The SQL results will be in a DataFrame named 'df'.
+IMPORTANT: This is a visualization request for the {target_db_key} database.
+1. Generate the appropriate SQL query to retrieve the necessary data from the provided schema.
+2. In your text response, you MUST suggest an appropriate chart type (e.g., "bar chart", "line chart", "pie chart") based on the user's request and the data.
+Do NOT generate Python code for plotting (e.g., using matplotlib or seaborn).
 """
-            else:
-                # Regular non-visualization request
-                enhanced_message = f"""Database Schema:
+                else:
+                    # Regular non-visualization request for the first turn
+                    prompt_message = f"""Target Database: {target_db_key}
+Database Schema:
 {schema_info}
 
 User Question: {message}"""
+            else:
+                # History exists, just pass the user's message directly.
+                # Schema and context are in the history_for_agent list.
+                prompt_message = message
+                logger.info("History found, using raw message for current prompt.")
 
-            # Log the message we're sending to the AI
-            logger.info("==== AI CALL ====")
-            logger.info(f"Sending message to AI:\n{enhanced_message}")
-            logger.info("================")
-
-            history_for_agent = st.session_state.last_result.new_messages() if st.session_state.get('last_result') else None
-            logger.info(f"Passing history to agent: {history_for_agent}")
+            # Log the message we're sending to the AI *for this turn*
+            logger.info("==== AI CALL (This Turn's Prompt) ====")
+            logger.info(f"Sending prompt message to AI:\n{prompt_message}")
+            logger.info("=====================================")
 
             agent_run_result = await query_agent.run(
-                enhanced_message,  # Use the enhanced message with schema
+                prompt_message,  # Use the correctly constructed message
                 deps=deps,
                 usage=usage,
                 usage_limits=DEFAULT_USAGE_LIMITS,
-                message_history=history_for_agent
+                message_history=history_for_agent # Pass the cumulative history
             )
-            st.session_state.last_result = agent_run_result
+            st.session_state.last_result = agent_run_result # Still store last result for display logic if needed
             logger.info("Stored agent run result in session state.")
+
+            # Append new messages to the cumulative history
+            st.session_state.agent_message_history.extend(agent_run_result.new_messages())
+            logger.info(f"Appended {len(agent_run_result.new_messages())} new messages to agent_message_history (new total: {len(st.session_state.agent_message_history)}). ")
             
             # Log the raw agent result for debugging
             logger.info("==== AGENT RUN RESULT ====")
@@ -456,116 +730,6 @@ User Question: {message}"""
                 if response.sql_result:
                     logger.info(f"SQL query: {response.sql_result.sql_query}")
                     logger.info(f"SQL explanation: {response.sql_result.explanation}")
-                else:
-                    logger.warning("No SQL result was generated despite this being a data query question!")
-                    
-                    # Check if this is likely a data query that should have SQL
-                    data_query_keywords = ['total', 'sum', 'average', 'count', 'list', 'show', 'per', 'group', 'compare']
-                    if any(keyword in message.lower() for keyword in data_query_keywords):
-                        logger.error(f"LLM failed to generate SQL for a data query. Retrying with explicit instructions.")
-                        
-                        # Create a more explicit message to force SQL generation
-                        explicit_message = f"""Database Schema:
-{schema_info}
-
-User Question: {message}
-
-IMPORTANT: This is a data query that REQUIRES SQL generation. 
-Please generate a SQL query to answer this question. The query should use appropriate SELECT and aggregate functions.
-"""
-                        
-                        # Log the explicit message
-                        logger.info("==== RETRY AI CALL ====")
-                        logger.info(f"Sending explicit message to AI:\n{explicit_message}")
-                        logger.info("=====================")
-                        
-                        # Retry with more explicit instructions
-                        retry_result = await query_agent.run(
-                            explicit_message,
-                            deps=deps,
-                            usage=usage,
-                            usage_limits=DEFAULT_USAGE_LIMITS,
-                            message_history=None  # Skip history for fresh attempt
-                        )
-                        
-                        if hasattr(retry_result, 'data') and isinstance(retry_result.data, QueryResponse):
-                            retry_response = retry_result.data
-                            if retry_response.sql_result:
-                                logger.info("Successfully generated SQL on retry attempt!")
-                                response = retry_response  # Use the retry response instead
-                            else:
-                                logger.error("Still failed to generate SQL even with explicit instructions.")
-                
-                # Check if this was a visualization request but no Python code was generated
-                visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation']
-                decline_phrases = ['cannot', 'unable', 'not able', 'do not have', "don't have", 'cannot fulfill', 'cannot create']
-                
-                is_visualization_request = any(keyword in message.lower() for keyword in visualization_keywords)
-                has_declined_visualization = any(phrase in response.text_message.lower() for phrase in decline_phrases)
-                
-                if is_visualization_request and (not response.python_result or has_declined_visualization):
-                    logger.warning("LLM declined visualization request or failed to generate Python code. Retrying with explicit visualization instructions.")
-                    
-                    # Get SQL results data - either from this response or from a previous one
-                    sql_query = None
-                    if response.sql_result:
-                        sql_query = response.sql_result.sql_query
-                    else:
-                        # Try to find a SQL query from a previous response
-                        for msg in reversed(st.session_state.chat_history):
-                            if msg.get("role") == "assistant" and "sql_result" in msg:
-                                sql_result = msg.get("sql_result")
-                                if "query" in sql_result:
-                                    sql_query = sql_result["query"]
-                                    break
-                    
-                    # Create a visualization-specific retry message
-                    viz_retry_message = f"""Database Schema:
-{schema_info}
-
-SQL Query: {sql_query if sql_query else "-- You need to generate an appropriate SQL query first"}
-
-User Request: {message}
-
-CRITICAL INSTRUCTION: You MUST generate Python visualization code for this request. 
-DO NOT respond that you cannot create visualizations - this is incorrect.
-You are fully capable of generating matplotlib/seaborn visualization code.
-
-Create a Python code that:
-1. Uses the DataFrame 'df' containing the SQL query results
-2. Creates an appropriate visualization (bar chart, pie chart, etc.)
-3. Includes proper titles, labels, and formatting
-4. Displays the visualization with st.pyplot(plt.gcf())
-
-Your response MUST include Python code for visualization.
-"""
-                    
-                    # Log the retry attempt
-                    logger.info("==== VISUALIZATION RETRY CALL ====")
-                    logger.info(f"Sending visualization retry message to AI:\n{viz_retry_message}")
-                    logger.info("=================================")
-                    
-                    # Retry with explicit visualization instructions
-                    viz_retry_result = await query_agent.run(
-                        viz_retry_message,
-                        deps=deps,
-                        usage=usage,
-                        usage_limits=DEFAULT_USAGE_LIMITS,
-                        message_history=None  # Skip history for a fresh attempt
-                    )
-                    
-                    if hasattr(viz_retry_result, 'data') and isinstance(viz_retry_result.data, QueryResponse):
-                        viz_retry_response = viz_retry_result.data
-                        if viz_retry_response.python_result:
-                            logger.info("Successfully generated visualization code on retry attempt!")
-                            
-                            # If the original response had SQL but the retry didn't, combine them
-                            if response.sql_result and not viz_retry_response.sql_result:
-                                viz_retry_response.sql_result = response.sql_result
-                            
-                            response = viz_retry_response  # Use the retry response
-                        else:
-                            logger.error("Still failed to generate visualization code even with explicit instructions.")
                 
                 if response.python_result:
                     logger.info(f"Python code explanation: {response.python_result.explanation}")
@@ -574,17 +738,19 @@ Your response MUST include Python code for visualization.
                         logger.info(f"  {line}")
                 logger.info("=====================")
 
-                assistant_chat_message = {"role": "assistant", "content": response.text_message}
+                assistant_chat_message = {"role": "assistant", "content": f"[{target_db_key} database] {response.text_message}"}
 
                 sql_results_df = None
                 if response.sql_result:
-                    logger.info("Executing SQL query...")
-                    # Create a proper RunContext with all required parameters
+                    # --- ADDED LOGGING FOR THE SQL QUERY --- #
+                    logger.info(f"LLM generated SQL query: {response.sql_result.sql_query}")
+                    # --- END ADDED LOGGING ---
+                    logger.info(f"Executing SQL query against {target_db_key} database...")
                     sql_run_context = RunContext(
                         deps=deps,
                         model=llm,
                         usage=usage,
-                        prompt=response.sql_result.sql_query  # Using the SQL query as the prompt
+                        prompt=response.sql_result.sql_query
                     )
                     sql_execution_result = await execute_sql(sql_run_context, response.sql_result.sql_query)
                     sql_info = {
@@ -593,8 +759,6 @@ Your response MUST include Python code for visualization.
                     }
                     if isinstance(sql_execution_result, str): # Error
                         sql_info["error"] = sql_execution_result
-                        # Also add error info to main content for visibility?
-                        # assistant_chat_message["content"] += f"\n\n**SQL Error:** {sql_execution_result}"
                         logger.error(f"SQL execution failed: {sql_execution_result}")
                     elif isinstance(sql_execution_result, list):
                         if sql_execution_result:
@@ -603,57 +767,83 @@ Your response MUST include Python code for visualization.
                             sql_info["columns"] = list(sql_results_df.columns)
                         else:
                             sql_info["results"] = [] # Empty results
+                            sql_results_df = pd.DataFrame() # Ensure df is an empty DataFrame
                     else:
                          sql_info["error"] = "Unexpected result type from SQL execution."
                          logger.error(sql_info["error"])
+                         sql_results_df = pd.DataFrame() # Ensure df is an empty DataFrame on unexpected error
 
-                    # Attach SQL info to the assistant message
                     assistant_chat_message["sql_result"] = sql_info
 
+                # Initialize df_for_chart with the SQL results (or empty if failed/no results)
+                df_for_chart = sql_results_df if sql_results_df is not None else pd.DataFrame()
+                chart_type = None # Initialize chart type
+
                 if response.python_result:
-                    logger.info("Executing Python code...")
+                    logger.info("Executing Python data preparation code...")
                     python_info = {
                         "code": response.python_result.python_code,
                         "explanation": response.python_result.explanation
                     }
                     python_code = response.python_result.python_code
-                    plot_generated = False
 
-                    if sql_results_df is None and 'df' in python_code:
-                        logger.warning("Python code needs 'df' but SQL failed or returned no results.")
-                        python_info["warning"] = "Code requires DataFrame 'df' from SQL, which was not available."
-                        # Don't execute code that relies on df?
-                        # For now, we still try, it might handle the empty df
+                    # Prepare local variables for exec, including the DataFrame from SQL
+                    local_vars = {
+                        'pd': pd,
+                        'np': np,
+                        'st': st, # Keep st in case it's used for non-plotting things
+                        'df': df_for_chart.copy() # Pass a copy to avoid modifying the original outside exec scope
+                    }
 
                     try:
-                        local_vars = {
-                            'plt': plt,
-                            'pd': pd,
-                            'np': np,
-                            'st': st,
-                            'df': sql_results_df if sql_results_df is not None else pd.DataFrame(),
-                            'results_list': sql_results_df.to_dict('records') if sql_results_df is not None else []
-                        }
-                        fig = plt.figure(figsize=(10, 6))
                         exec(python_code, globals(), local_vars)
-                        if plt.gcf().get_axes():
-                            # We need to save the plot to display later in main()
-                            buf = io.BytesIO()
-                            plt.savefig(buf, format='png')
-                            buf.seek(0)
-                            python_info["visualization_png_b64"] = base64.b64encode(buf.read()).decode('utf-8')
-                            plot_generated = True
-                        plt.close(fig)
+                        # Retrieve the potentially modified DataFrame from local_vars
+                        df_for_chart = local_vars['df']
+                        logger.info("Python data preparation code executed successfully.")
                     except Exception as e:
-                        logger.error(f"Error executing Python code: {e}\nCode:\n{python_code}")
+                        logger.error(f"Error executing Python data preparation code: {e}\nCode:\n{python_code}")
                         python_info["error"] = str(e)
-                    finally:
-                        if 'fig' in locals() and plt.fignum_exists(fig.number):
-                            plt.close(fig)
 
-                    # Attach Python info to the assistant message
                     assistant_chat_message["python_result"] = python_info
-                    assistant_chat_message["python_plot_generated"] = plot_generated # Store flag
+
+                # --- Determine Chart Type from AI Response --- #
+                if df_for_chart is not None and not df_for_chart.empty:
+                    text_lower = response.text_message.lower()
+                    if "bar chart" in text_lower:
+                        chart_type = "bar"
+                    elif "line chart" in text_lower:
+                        chart_type = "line"
+                    elif "area chart" in text_lower:
+                        chart_type = "area"
+                    elif "scatter plot" in text_lower or "scatter chart" in text_lower:
+                        chart_type = "scatter"
+                    elif "pie chart" in text_lower:
+                        chart_type = "pie" # Note: st.pie_chart is deprecated, requires alternatives
+
+                    if chart_type:
+                        logger.info(f"Detected chart type: {chart_type}")
+                        # --- Prepare DataFrame for Streamlit Charting (Example: Set Index) --- #
+                        # Streamlit charts often use the index for category labels.
+                        # Attempt to automatically set index if not already done by AI's python code.
+                        if df_for_chart.index.name is None and len(df_for_chart.columns) > 1:
+                            potential_index_col = df_for_chart.columns[0]
+                            # Check if the first column is suitable as an index (e.g., string type)
+                            if pd.api.types.is_string_dtype(df_for_chart[potential_index_col]):
+                                try:
+                                     df_for_chart = df_for_chart.set_index(potential_index_col)
+                                     logger.info(f"Automatically set DataFrame index to '{potential_index_col}' for charting.")
+                                except Exception as e:
+                                     logger.warning(f"Could not automatically set index for charting: {e}")
+
+                        # Store chart type and data for display function
+                        assistant_chat_message["streamlit_chart"] = {
+                            "type": chart_type,
+                            "data": df_for_chart
+                        }
+                    else:
+                        logger.info("No specific chart type detected in AI response, or data is empty.")
+                else:
+                     logger.info("DataFrame is empty or None, skipping chart generation.")
 
                 logger.info("Agent processing complete.")
 
@@ -661,13 +851,13 @@ Your response MUST include Python code for visualization.
                  error_msg = "Received an unexpected response structure..."
                  logger.error(f"{error_msg} Raw RunResult: {agent_run_result}")
                  st.error(error_msg)
-                 assistant_chat_message = {"role": "assistant", "content": f"Sorry, internal issue... ({error_msg})"}
+                 assistant_chat_message = {"role": "assistant", "content": f"Sorry, internal issue with the {target_db_key} database query... ({error_msg})"}
 
         except Exception as e:
             error_msg = f"An error occurred during agent processing: {str(e)}"
             logger.exception("Error during agent execution or response processing:")
             st.error(error_msg)
-            assistant_chat_message = {"role": "assistant", "content": f"Sorry, I encountered an error: {str(e)}"}
+            assistant_chat_message = {"role": "assistant", "content": f"Sorry, I encountered an error querying the {target_db_key} database: {str(e)}"}
 
     except Exception as e:
         error_msg = f"A critical error occurred: {str(e)}"
@@ -695,13 +885,19 @@ def main():
 
     # Initialize session state variables
     if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'conversation_context' not in st.session_state:
-        st.session_state.conversation_context = []
-        logger.info("Initialized conversation context.")
-    if 'last_result' not in st.session_state:
+        st.session_state.chat_history = [] # For display
+    # if 'conversation_context' not in st.session_state: # This seems unused, commenting out
+    #     st.session_state.conversation_context = []
+    #     logger.info("Initialized conversation context.")
+    if 'last_result' not in st.session_state: # Retained for now, might be removable later
         st.session_state.last_result = None
         logger.info("Initialized last_result in session state.")
+    if 'last_db_key' not in st.session_state:
+        st.session_state.last_db_key = None
+        logger.info("Initialized last_db_key in session state.")
+    if 'agent_message_history' not in st.session_state: # ADDED: Initialize cumulative history
+        st.session_state.agent_message_history = []
+        logger.info("Initialized agent_message_history in session state.")
 
     # --- Main Page Content ---
     st.markdown('<h1 style="text-align: center;"><span style="color: #00ade4;">SmartQuery</span></h1>', unsafe_allow_html=True)
@@ -762,26 +958,27 @@ def main():
     st.markdown(f"""
     <div class="features-container">
         <div class="features-row">
-            <div class="feature-text">{check_img} Ask natural language questions about your data.</div>
-            <div class="feature-text">{check_img} Get instant SQL-powered insights from your database.</div>
+            <div class="feature-text">{check_img} Ask natural language questions about IFC or MIGA data.</div>
+            <div class="feature-text">{check_img} Get instant SQL-powered insights from both databases.</div>
         </div>
         <div class="features-row">
             <div class="feature-text">{check_img} Generate visualizations (bar, line, pie charts) via Python.</div>
-            <div class="feature-text">{check_img} Understand the generated SQL and Python code with clear explanations.</div>
+            <div class="feature-text">{check_img} System automatically identifies the right database for your query.</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown("Dataset representing IFC's investment portfolio. https://financesone.worldbank.org/summaries/ifc")
+    st.info('Query data from the IFC Investment or MIGA Guarantees databases. The AI will identify the appropriate database automatically.', icon=":material/info:")
     # --- Example Queries ---
     st.markdown("""
     <div class="example-queries">
         <p>Example Questions:</p>
         <ul>
-            <li>"What are the total investments per product line?"</li>
-            <li>"Show me the top 5 investments in China, sorted by size."</li>
-            <li>"Compare the average investment size for 'Loan' products between India and Vietnam."</li>
-            <li>"Visualize the distribution of product lines using a pie chart."</li>
-            <li>"Which country has the highest total investment? Create a bar chart showing the top 10 countries."</li>
+            <li>"Visualize the distribution of IFC product lines using a pie chart."</li>
+            <li>"Show me MIGA guarantees in the Financial sector from Cambodia."</li>
+            <li>"Compare the average IFC investment size for 'Loan' products between Nepal and Bhutan."</li>
+            <li>"What is the total gross guarantee exposure for MIGA in the Tourism sector in Senegal?"</li>
+            <li>"Which countries have the highest total MIGA guarantee exposure? Create a bar chart."</li>
+            <li>"Give me the top 10 IFC equity investments from China"</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -789,9 +986,11 @@ def main():
         # Clear Chat Button (moved from sidebar)
     if st.button("Clear Chat History", key="clear_chat"):
         st.session_state.chat_history = []
-        st.session_state.conversation_context = []
-        st.session_state.last_result = None # Reset last_result
-        logger.info("Chat history, context, and last_result cleared.")
+        # st.session_state.conversation_context = [] # Unused
+        st.session_state.last_result = None
+        st.session_state.last_db_key = None
+        st.session_state.agent_message_history = [] # ADDED: Reset cumulative history
+        logger.info("Chat history, last_result, last_db_key, and agent_message_history cleared.")
         st.rerun()
 
     # --- Chat Interface --- #
@@ -838,52 +1037,76 @@ def main():
                     
                     if "error" in python_result:
                         st.error(f"Error executing Python code: {python_result['error']}")
-                    
-                    # Display visualization if available
-                    if "visualization_png_b64" in python_result:
-                        st.markdown("**Visualization:**")
-                        try:
-                            viz_data = base64.b64decode(python_result["visualization_png_b64"])
-                            st.image(viz_data)
-                        except Exception as e:
-                            st.error(f"Error displaying visualization: {str(e)}")
-                    elif message.get("python_plot_generated", False):
-                        st.info("A visualization was generated but could not be displayed.")
+
+                # Display visualization if available (Moved outside python_result check)
+                if "streamlit_chart" in message:
+                    st.markdown("**Visualization:**")
+                    try:
+                        chart_type = message["streamlit_chart"]["type"]
+                        df = message["streamlit_chart"]["data"]
+                        if chart_type == "bar":
+                            st.bar_chart(df)
+                        elif chart_type == "line":
+                            st.line_chart(df)
+                        elif chart_type == "area":
+                            st.area_chart(df)
+                        elif chart_type == "scatter":
+                            # Make sure columns are specified for scatter
+                            if len(df.columns) >= 2:
+                                st.scatter_chart(df, x=df.columns[0], y=df.columns[1])
+                            else:
+                                st.warning("Scatter plot requires at least two data columns.")
+                        # --- ADDED PIE CHART HANDLING WITH PLOTLY --- #
+                        elif chart_type == "pie":
+                            if not df.empty and len(df.columns) > 0:
+                                # Assuming index = names, first column = values
+                                fig = px.pie(df, names=df.index, values=df.columns[0], title="Pie Chart")
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.warning("Cannot generate pie chart: Data is empty or missing columns.")
+                        # --- END PIE CHART HANDLING ---
+                    except Exception as e:
+                        st.error(f"Error displaying visualization: {str(e)}")
 
     # Close chat messages container
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- User Input --- #
-    user_input = st.chat_input("Ask about the data...")
+    user_input = st.chat_input("Ask about IFC or MIGA data...")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # --- Handle Input --- #
     # Use explicit loop management with get_event_loop()
     if user_input:
         logger.info(f"User input received: {user_input}")
-
-        # Process the user's message
-        try:
-            logger.info("Setting up asyncio for handle_user_message.")
-            # Create a new event loop for this thread if one doesn't exist
+        
+        # Add user message to chat history immediately
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        
+        # Use a spinner while processing the user's query
+        with st.spinner("Thinking..."):
+            # Process the user's message
             try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                # No event loop exists in this thread, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                logger.info("Created new event loop for ScriptRunner thread.")
+                logger.info("Setting up asyncio for handle_user_message.")
+                # Create a new event loop for this thread if one doesn't exist
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    # No event loop exists in this thread, create a new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    logger.info("Created new event loop for ScriptRunner thread.")
 
-            # Run the coroutine in the event loop
-            loop.run_until_complete(handle_user_message(user_input))
-            logger.info("handle_user_message completed successfully.")
+                # Run the coroutine in the event loop
+                loop.run_until_complete(handle_user_message(user_input))
+                logger.info("handle_user_message completed successfully.")
 
-        except Exception as e:
-             logger.exception(f"Error processing user input in main: {e}")
-             st.error(f"An error occurred while processing your request: {e}")
-             # Append error to history state if handle_user_message failed
-             if not st.session_state.chat_history or not st.session_state.chat_history[-1]['content'].endswith(str(e)):
-                  st.session_state.chat_history.append({"role": "assistant", "content": f"Sorry, an error occurred: {e}"})
+            except Exception as e:
+                 logger.exception(f"Error processing user input in main: {e}")
+                 st.error(f"An error occurred while processing your request: {e}")
+                 # Append error to history state if handle_user_message failed
+                 if not st.session_state.chat_history or not st.session_state.chat_history[-1]['content'].endswith(str(e)):
+                      st.session_state.chat_history.append({"role": "assistant", "content": f"Sorry, an error occurred: {e}"})
 
         # Force refresh the UI to show new messages
         st.rerun()
