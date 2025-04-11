@@ -162,6 +162,7 @@ CRITICAL RULES FOR SQL GENERATION:
 3. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
 4. GROUPING: When a question mentions "per" some field (e.g., "per product line"), this requires a GROUP BY clause for that field.
 5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query.
+6. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.) or could be potentially harmful. These will be blocked by the system for security reasons and will cause errors.
 
 PYTHON CODE FOR DATA PREPARATION (NOT PLOTTING):
 - If a user requests analysis or visualization that requires data manipulation *after* the SQL query (e.g., complex calculations, reshaping data, setting index for charts), generate Python code using pandas.
@@ -206,10 +207,45 @@ async def execute_sql(ctx: RunContext[AgentDependencies], query: str) -> Union[L
     """
     if not ctx.deps.db_connection:
         return "Error: Database connection is not available."
+    
+    # Enhanced safety checks: whitelist approach - only allow SELECT statements
+    query = query.strip()
+    
+    # Check for SQL commands that could modify the database or compromise security
+    forbidden_commands = ['ALTER', 'CREATE', 'DELETE', 'DROP', 'INSERT', 'UPDATE', 'PRAGMA', 
+                          'ATTACH', 'DETACH', 'VACUUM', 'GRANT', 'REVOKE', 'EXECUTE', 'TRUNCATE']
+    
+    # Normalized query for checking (uppercase without comments)
+    normalized_query = ' '.join([
+        line for line in query.upper().split('\n') 
+        if not line.strip().startswith('--')
+    ])
+    
     # Basic safety check: only allow SELECT statements
-    if not query.strip().upper().startswith("SELECT"):
+    if not normalized_query.startswith("SELECT"):
         logger.warning(f"Attempted non-SELECT query execution: {query}")
         return "Error: Only SELECT queries are allowed."
+    
+    # Check for forbidden commands that might be hidden in subqueries or clauses
+    for cmd in forbidden_commands:
+        if f" {cmd} " in f" {normalized_query} ":
+            logger.warning(f"Blocked query containing forbidden command '{cmd}': {query}")
+            return f"Error: Detected potentially harmful SQL command '{cmd}'. For security reasons, this operation is not allowed."
+    
+    # Check for multiple statements with semicolons (except those in quotes)
+    # Simple check - this isn't perfect but adds another layer of protection
+    statement_count = 0
+    in_quotes = False
+    for char in query:
+        if char in ["'", '"']:
+            in_quotes = not in_quotes
+        if char == ';' and not in_quotes:
+            statement_count += 1
+    
+    if statement_count > 0:
+        logger.warning(f"Blocked query with multiple statements: {query}")
+        return "Error: Multiple SQL statements are not allowed for security reasons."
+    
     try:
         cursor = ctx.deps.db_connection.cursor()
         cursor.execute(query)
@@ -411,6 +447,7 @@ async def validate_query_result(ctx: RunContext[AgentDependencies], result: Quer
     - Cleans potential extraneous characters from SQL.
     - Checks if SQL is missing when likely needed.
     - Checks if Python code is missing or declined for visualization requests.
+    - Enforces SQL security by blocking potentially harmful statements.
     Raises ModelRetry if validation fails, prompting the LLM to correct the response.
     """
     user_message = ctx.prompt # The message sent to the agent (includes schema and user query)
@@ -428,18 +465,47 @@ async def validate_query_result(ctx: RunContext[AgentDependencies], result: Quer
         else:
             cleaned_sql = original_sql # Ensure cleaned_sql is set
 
+        # --- Enhanced Security Validation --- #
+        # Check for potentially harmful SQL statements - similar to execute_sql but earlier in the pipeline
+        forbidden_commands = ['ALTER', 'CREATE', 'DELETE', 'DROP', 'INSERT', 'UPDATE', 'PRAGMA', 
+                           'ATTACH', 'DETACH', 'VACUUM', 'GRANT', 'REVOKE', 'EXECUTE', 'TRUNCATE']
+        
+        # Normalized query for checking (uppercase without comments)
+        normalized_query = ' '.join([
+            line for line in cleaned_sql.upper().split('\n') 
+            if not line.strip().startswith('--')
+        ])
+        
+        # Check if query is a SELECT statement
+        if not normalized_query.strip().startswith("SELECT"):
+            logger.warning(f"Non-SELECT query generated: {cleaned_sql}")
+            raise ModelRetry("Only SELECT queries are allowed for security reasons. Please regenerate a proper SELECT query.")
+        
+        # Check for forbidden commands that might be hidden in subqueries or clauses
+        for cmd in forbidden_commands:
+            if f" {cmd} " in f" {normalized_query} ":
+                logger.warning(f"Detected forbidden SQL command '{cmd}' in: {cleaned_sql}")
+                raise ModelRetry(f"The SQL query contains a potentially harmful command '{cmd}'. For security reasons, only pure SELECT statements are allowed. Please regenerate the query without this command.")
+        
+        # Check for multiple statements with semicolons (except those in quotes)
+        statement_count = 0
+        in_quotes = False
+        for char in cleaned_sql:
+            if char in ["'", '"']:
+                in_quotes = not in_quotes
+            if char == ';' and not in_quotes:
+                statement_count += 1
+        
+        if statement_count > 0:
+            logger.warning(f"Multiple SQL statements detected: {cleaned_sql}")
+            raise ModelRetry("Multiple SQL statements are not allowed for security reasons. Please provide a single SELECT query without semicolons.")
+
         # Validate SQL Syntax using EXPLAIN QUERY PLAN (suitable for SQLite)
         try:
             cursor = ctx.deps.db_connection.cursor()
-            if cleaned_sql.strip().upper().startswith("SELECT"):
-                 cursor.execute(f"EXPLAIN QUERY PLAN {cleaned_sql}")
-                 cursor.fetchall()
-                 logger.info("Generated SQL query syntax validated successfully.")
-            else:
-                 logger.warning("Validation skipped: Non-SELECT query generated.")
-                 # You could potentially raise ModelRetry here too if non-SELECT is strictly forbidden
-                 # raise ModelRetry("Only SELECT queries are allowed. Please regenerate the query.")
-
+            cursor.execute(f"EXPLAIN QUERY PLAN {cleaned_sql}")
+            cursor.fetchall()
+            logger.info("Generated SQL query syntax validated successfully.")
         except sqlite3.Error as e:
             error_detail = f"SQL Syntax Validation Error: {e}. Query: {cleaned_sql}"
             logger.error(error_detail)
