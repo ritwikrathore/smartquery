@@ -540,7 +540,7 @@ Based *only* on the query and the database descriptions, which database key ({va
              return None, f"Internal Error: Failed to configure AI Service ({config_err})."
 
         # Use a potentially faster/cheaper model for classification
-        gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-2.0-flash")
+        gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash")
         local_llm = GeminiModel(model_name=gemini_model_name)
         logger.info(f"Instantiated GeminiModel: {gemini_model_name} for classification.")
 
@@ -703,7 +703,7 @@ Based *only* on the user query and the table descriptions, which of the listed t
                  # Use raise instead of return to propagate the error
                  raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-2.0-flash") # Reuse faster model
+            gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash") # Reuse faster model
             local_llm = GeminiModel(model_name=gemini_model_name)
             logger.info(f"Instantiated GeminiModel: {gemini_model_name} for table selection.")
 
