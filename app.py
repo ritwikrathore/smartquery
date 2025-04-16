@@ -1482,7 +1482,7 @@ def filter_message_history(messages: List[Any]) -> List[Dict[str, str]]:
 # --- Main Streamlit App Function ---
 def main():
     """Main function to run the Streamlit application."""
-    st.set_page_config(layout="wide", page_title="SmartQuery")
+    st.set_page_config(layout="centered", page_title="SmartQuery")
 
     # Initialize session state variables safely
     default_session_state = {
