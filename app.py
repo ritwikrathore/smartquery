@@ -1642,8 +1642,10 @@ def main():
                                 st.warning("Cannot generate pie chart: Data is empty or missing columns.")
                     except Exception as e:
                         st.error(f"Error displaying visualization: {str(e)}")
+        # --- Table Selection UI with Scroll Anchor ---
         if st.session_state.get("table_confirmation_pending", False):
-            logger.info("Rendering table confirmation UI inside chat message area.")
+            # Insert anchor div before table selection UI
+            st.markdown('<div id="table-selection-anchor"></div>', unsafe_allow_html=True)
             candidate_tables = st.session_state.get("candidate_tables", [])
             all_tables = st.session_state.get("all_tables", [])
             reasoning = st.session_state.get("table_agent_reasoning", "")
@@ -1663,6 +1665,23 @@ def main():
                     st.session_state.table_confirmation_pending = False
                     st.session_state.confirmed_tables = selected
                     st.rerun()
+            # Inject JS to scroll to the anchor
+            import time
+            from streamlit.components.v1 import html
+            html(f"""
+              <script>
+                  // Unique timestamp: {time.time()}
+                  function scrollToTableSelection() {{
+                      var element = window.parent.document.getElementById('table-selection-anchor');
+                      if (element) {{
+                          element.scrollIntoView({{ behavior: 'smooth' }});
+                      }} else {{
+                          setTimeout(scrollToTableSelection, 100);
+                      }}
+                  }}
+                  scrollToTableSelection();
+              </script>
+            """, height=0, width=0)
     st.markdown('</div>', unsafe_allow_html=True)
     if not st.session_state.get("table_confirmation_pending", False):
         user_input = st.chat_input("Ask about IFC or MIGA data...")
