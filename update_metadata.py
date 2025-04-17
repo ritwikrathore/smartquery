@@ -1,6 +1,8 @@
 import sqlite3
 import json
 import os
+import argparse
+import sys
 
 def get_column_types_from_db(db_path, table_name):
     """Fetches column names and their data types from an SQLite table."""
@@ -90,8 +92,8 @@ def get_db_schema(db_path):
         if conn:
             conn.close()
 
-def update_metadata_for_db(metadata_path, target_db_key):
-    """Loads metadata JSON, updates the entry for target_db_key based on its DB schema, and saves it back."""
+def update_metadata_for_db(metadata_path, db_path):
+    """Loads metadata JSON, updates or adds the entry for the given db_path based on its DB schema, and saves it back."""
     if not os.path.exists(metadata_path):
         print(f"Error: Metadata file not found at {metadata_path}")
         return
@@ -108,20 +110,30 @@ def update_metadata_for_db(metadata_path, target_db_key):
 
     print(f"Read metadata from {metadata_path}")
 
-    # --- Check if target DB key exists --- 
-    if target_db_key not in metadata.get('databases', {}):
-        print(f"Error: Database key '{target_db_key}' not found in metadata file.")
-        print("Please ensure the key exists under the 'databases' section in the JSON.")
-        return
+    # --- Determine the key for this database ---
+    db_filename = os.path.basename(db_path)
+    db_key = os.path.splitext(db_filename)[0]
 
-    db_entry = metadata['databases'][target_db_key]
-    db_path = db_entry.get('database_path')
+    if 'databases' not in metadata:
+        metadata['databases'] = {}
 
-    if not db_path:
-        print(f"Error: 'database_path' not defined for '{target_db_key}' in metadata.")
-        return
+    # --- Add entry if it doesn't exist ---
+    if db_key not in metadata['databases']:
+        print(f"Database key '{db_key}' not found in metadata. Adding new entry.")
+        metadata['databases'][db_key] = {
+            'database_path': db_path,
+            'tables': {}
+        }
+        metadata_changed = True
+    else:
+        metadata_changed = False
+        # Update the path if it's different
+        if metadata['databases'][db_key].get('database_path') != db_path:
+            print(f"Updating database_path for '{db_key}' to '{db_path}'")
+            metadata['databases'][db_key]['database_path'] = db_path
+            metadata_changed = True
 
-    print(f"Processing database: '{target_db_key}' using path: '{db_path}'")
+    db_entry = metadata['databases'][db_key]
 
     # --- Get the actual schema from the database --- 
     actual_schema = get_db_schema(db_path)
@@ -131,11 +143,10 @@ def update_metadata_for_db(metadata_path, target_db_key):
         return
 
     if not actual_schema:
-        print(f"No tables found in database '{db_path}'. No updates made to metadata for '{target_db_key}'.")
+        print(f"No tables found in database '{db_path}'. No updates made to metadata for '{db_key}'.")
         return
 
     # --- Synchronize schema with metadata --- 
-    metadata_changed = False
     if 'tables' not in db_entry:
         db_entry['tables'] = {}
         metadata_changed = True # Added the tables key
@@ -174,22 +185,15 @@ def update_metadata_for_db(metadata_path, target_db_key):
                 metadata_changed = True
             else:
                 # Update column type if DB type is different and not empty/defaulted
-                # Note: actual_type here will be the DB type or 'TEXT' if DB type was empty
                 current_type = metadata_columns[col_name].get('type', None)
                 if current_type != actual_type:
-                     # We update regardless of whether the DB type was originally empty,
-                     # because get_db_schema provides a non-empty default ('TEXT').
-                     # This ensures the JSON always has a type.
                     print(f"      Updating type for column '{col_name}': '{current_type}' -> '{actual_type}'")
                     metadata_columns[col_name]['type'] = actual_type
                     metadata_changed = True
 
-        # Optional: Check for columns in JSON that are NOT in the DB (could be removed or flagged)
-        # For now, we are only adding/updating based on the DB schema.
-
     # --- Save updated metadata if changes were made --- 
     if metadata_changed:
-        print(f"Metadata for '{target_db_key}' was updated. Saving changes to {metadata_path}...")
+        print(f"Metadata for '{db_key}' was updated. Saving changes to {metadata_path}...")
         try:
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=4)
@@ -197,17 +201,16 @@ def update_metadata_for_db(metadata_path, target_db_key):
         except IOError as e:
             print(f"Error writing updated metadata to {metadata_path}: {e}")
         except TypeError as e:
-             print(f"Error serializing metadata to JSON: {e}")
+            print(f"Error serializing metadata to JSON: {e}")
     else:
-        print(f"No changes needed for '{target_db_key}'. Metadata file remains unchanged.")
+        print(f"No changes needed for '{db_key}'. Metadata file remains unchanged.")
 
 if __name__ == "__main__":
-    # --- Configuration ---
-    METADATA_FILE = 'database_metadata.json'
-    # Specify which database entry in the JSON to update
-    TARGET_DATABASE_KEY = 'IFC'
-    # -------------------
+    parser = argparse.ArgumentParser(description="Update or add database schema metadata for a given SQLite DB.")
+    parser.add_argument("db_path", help="Path to the SQLite database file.")
+    parser.add_argument("--metadata", default=r"C:\Users\rrathore1\Projects\smartquery\assets\database_metadata.json", help="Path to the metadata JSON file (default: database_metadata.json)")
+    args = parser.parse_args()
 
-    print(f"Starting metadata update process for database key: '{TARGET_DATABASE_KEY}'...")
-    update_metadata_for_db(METADATA_FILE, TARGET_DATABASE_KEY)
+    print(f"Starting metadata update process for database: '{args.db_path}'...")
+    update_metadata_for_db(args.metadata, args.db_path)
     print("Metadata update process finished.") 

@@ -140,6 +140,52 @@
                     }
                 }
             }
+        },
+        "IBRD": {
+            "database_path": "assets/ibrd_ida_summary.db",
+            "tables": {
+                "ibrd_ida_summary": {
+                    "description": "Contains information about the International Bank for Reconstruction and Development (IBRD) and the International Development Association (IDA). IBRD lends to governments of middle-income and creditworthy low-income countries. IDA provides interest-free loans – called credits – and grants to governments of the poorest countries. Together, IBRD and IDA make up the World Bank.",
+                    "columns": {
+                        "project_id": {
+                            "type": "TEXT",
+                            "description": "The unique identifier for the project."
+                        },
+                        "project_name": {
+                            "type": "TEXT",
+                            "description": "The official name of the project."
+                        },
+                        "product_number": {
+                            "type": "TEXT",
+                            "description": "The product number for the project."
+                        },
+                        "principal_amount": {
+                            "type": "REAL",
+                            "description": "The principal amount of the project."
+                        },
+                        "available_amount": {
+                            "type": "REAL",
+                            "description": "The available amount of the project."
+                        },
+                        "disbursed_amount": {
+                            "type": "REAL",
+                            "description": "The disbursed amount of the project."
+                        },
+                        "country": {
+                            "type": "TEXT",
+                            "description": "The country to which lending is provided."
+                        },
+                        "status": {
+                            "type": "TEXT",
+                            "description": "The status of the project. Contains values like 'Approved', 'Disbursed', 'Signed', Terminated, Fully Cancelled, Effective, etc."
+                        },
+                        "approval_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date the project was approved."
+                        }
+                    }
+                }
+            }
         }
     }
 }
