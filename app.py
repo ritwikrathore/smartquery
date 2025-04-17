@@ -401,6 +401,54 @@ def create_query_agent_blueprint():
         "result_validator_func": validate_query_result # Pass the validator function
     }
 
+def create_column_prune_agent_blueprint():
+    """Returns the CONFIGURATION for the Column Pruning Agent."""
+    # Note: No model instance passed here anymore
+    return {
+        "result_type": PrunedSchemaResult,
+        "name": "Column Pruning Agent",
+        "retries": 2,
+        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.
+
+IMPORTANT: The schema of the database will be provided at the beginning of each user message. Use this schema information to understand the database structure and generate an accurate pruned schema string. DO NOT respond that you need to know the table structure - it is already provided in the message.
+
+CRITICAL RULES FOR SCHEMA PRUNING:
+1. For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQLite query.
+2. PAY ATTENTION TO COLUMN NAMES: If a column name in the provided schema contains spaces or special characters, you MUST enclose it in double quotes (e.g., SELECT "Total IFC Investment Amount" FROM ...). Failure to quote such names will cause errors. Check for columns like "IFC investment for Risk Management(Million USD)", "IFC investment for Guarantee(Million USD)", etc.
+3. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
+4. GROUPING: When a question mentions "per" some field (e.g., "per product line"), this requires a GROUP BY clause for that field.
+5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., "IFC investment for Loan(Million USD)" for loan sizes).
+6. DATA TYPES: Be mindful that many numeric columns might be stored as TEXT (e.g., "(Million USD)" columns). You might need to CAST them to a numeric type (e.g., CAST("IFC investment for Loan(Million USD)" AS REAL)) before performing calculations like AVG or SUM. Handle potential non-numeric values gracefully if possible (e.g., WHERE clause to filter them out before casting, or use `IFNULL(CAST(... AS REAL), 0)`).
+7. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.) or could be potentially harmful. These will be blocked by the system for security reasons and will cause errors.
+
+PYTHON CODE FOR DATA PREPARATION (NOT PLOTTING):
+- If a user requests analysis or visualization that requires data manipulation *after* the SQL query (e.g., complex calculations, reshaping data, setting index for charts), generate Python code using pandas.
+- Assume the SQL results are available in a pandas DataFrame named 'df'.
+- The Python code should ONLY perform data manipulation/preparation on the 'df'.
+- CRITICAL: DO NOT include any plotting code (e.g., `matplotlib`, `seaborn`, `st.pyplot`) in the Python code block. The final plotting using native Streamlit charts (like `st.bar_chart`) will be handled separately by the application based on your textual explanation and the prepared data.
+- If no specific Python data manipulation is needed beyond the SQL query, do not generate a Python code result.
+
+VISUALIZATION REQUESTS:
+- When users request charts, graphs, or plots, first generate the necessary SQL query (remembering data type casting if needed for aggregation).
+- If the data from SQL needs further processing for the chart (e.g., setting the index, renaming columns), generate Python code as described above to prepare the 'df'.
+- In your text response, clearly state the type of chart you recommend (e.g., "bar chart", "line chart", "pie chart", "scatter plot") based on the user's request and the data structure. Use these exact phrases where possible.
+- NEVER respond that you cannot create visualizations.
+
+RESPONSE STRUCTURE:
+1. First, review the database schema provided in the message.
+2. Understand the request: Does it require data retrieval (SQL), potential data preparation (Python), or just a textual answer? Check for keywords indicating calculations (average, total, sum) or comparisons.
+3. Generate SQL: If data is needed, generate an accurate SQLite query string following the rules above (quoting names, casting types, using aggregates).
+4. Generate Python Data Prep Code (if needed): If data manipulation beyond SQL is required for analysis or the requested chart, generate Python pandas code acting on 'df'.
+5. Explain Clearly: Explain the SQL query (including any casting) and any Python data preparation steps. If visualization was requested, explicitly suggest the chart type (e.g., "bar chart", "line chart") in your text message.
+6. Format Output: Format your final response using the 'QueryResponse' structure. Include 'text_message', 'sql_result' (if applicable), and 'python_result' (if Python data prep code was generated).
+7. **CRUCIAL**: Even if you use internal tools (like `execute_sql`) to find the answer or validate the query during your thought process, the final `QueryResponse` object you return MUST contain the generated SQL query string in the `sql_result` field if the user's request required data retrieval from the database. Do not omit the `sql_result` just because you used a tool internally.
+8. Safety: Focus ONLY on SELECT queries. Do not generate SQL/Python that modifies the database.
+9. Efficiency: Write efficient SQL queries. Filter data (e.g., using WHERE clause for country or product type) before aggregation.
+
+Remember, your final output must be the structured 'QueryResponse' object containing the text message and the generated SQL/Python strings (if applicable).
+"""
+    }
+
 
 # --- Metadata and Schema Functions --- (Keep as is)
 METADATA_PATH = Path(__file__).parent / "assets" / "database_metadata.json"
@@ -880,416 +928,331 @@ async def handle_follow_up_chart(message: str):
 
 
 async def run_agents_post_confirmation_inner(
-    db_metadata: Dict,
+    db_metadata: dict,
+    selected_tables: list,
     target_db_key: str,
     target_db_path: str,
-    selected_tables: List[str],
     user_message: str,
-    agent_message_history: List[Dict] # Pass history explicitly
-) -> Union[Dict, str]:
+    agent_message_history: list
+) -> dict:
     """
-    Inner async function to run the main query agent AFTER table confirmation.
-    Handles DB connection, agent instantiation, execution, and result processing.
-    Returns a message dictionary on success, or an error string on failure.
+    Handles schema formatting, column pruning, and main query agent in sequence.
+    Returns the final assistant message dict or error message dict.
     """
+    import pandas as pd
+    import numpy as np
     deps = None
     final_assistant_message_dict = None
     start_inner_time = time.time()
     logger.info("run_agents_post_confirmation_inner started.")
-
+    pruned_schema_string = None
+    assistant_chat_message = None
     try:
-        # --- Instantiate Model and Query Agent Locally --- #
-        logger.info("Instantiating LLM/Agent for post-confirmation query...")
-        global google_api_key
-        try:
-            genai.configure(api_key=google_api_key)
-            logger.info("Configured GenAI SDK within post-confirmation flow.")
-        except Exception as config_err:
-             logger.error(f"Failed to configure GenAI SDK post-confirmation: {config_err}", exc_info=True)
-             return f"Internal Error: Failed to configure AI Service ({config_err})." # Return error string
+        # Step 1: Format FULL schema for selected tables
+        with st.spinner("Formatting schema for selected tables..."):
+            logger.info(f"Formatting FULL schema for CONFIRMED tables: {selected_tables}...")
+            full_schema_for_pruning = format_schema_for_selected_tables(db_metadata, target_db_key, selected_tables)
+        if full_schema_for_pruning.startswith("Error:"):
+            logger.error(f"Could not get valid full schemas for selected tables: {full_schema_for_pruning}")
+            return {"role": "assistant", "content": f"Sorry, couldn't retrieve valid schema details for the selected tables ({', '.join(selected_tables)}) in the {target_db_key} database: {full_schema_for_pruning}"}
+        # Step 2: Run Column Pruning Agent
+        with st.spinner("Pruning schema with Column Pruning Agent..."):
+            logger.info("Running Column Pruning Agent...")
+            pruning_prompt = f'''User Query: "{user_message}"
 
-        # Use a more capable model for the main query generation
-        gemini_model_name = st.secrets.get("GEMINI_MAIN_MODEL", "gemini-2.0-flash")
-        local_llm = GeminiModel(model_name=gemini_model_name)
-        logger.info(f"Instantiated GeminiModel: {gemini_model_name} for post-confirmation flow.")
+Full Schema for Relevant Tables:
+{full_schema_for_pruning}
 
-        # Get blueprint and create agent
-        agent_config_bp = create_query_agent_blueprint()
-        # We need to instantiate the agent properly with decorators/tools
-        local_query_agent = Agent(
-            local_llm,
-            deps_type=agent_config_bp["deps_type"],
-            result_type=agent_config_bp["result_type"],
-            name=agent_config_bp["name"],
-            retries=agent_config_bp["retries"],
-        )
-        # Manually apply decorators from blueprint info
-        local_query_agent.system_prompt(agent_config_bp["system_prompt_func"])
-        for tool_func in agent_config_bp["tools"]:
-            local_query_agent.tool(tool_func)
-        local_query_agent.result_validator(agent_config_bp["result_validator_func"])
-
-        logger.info("Query agent created locally for post-confirmation flow.")
-        # --- End Instantiation ---
-
-        # --- Format Schema for SELECTED tables --- #
-        logger.info(f"Formatting schema for CONFIRMED tables: {selected_tables}...")
-        schema_to_use = format_schema_for_selected_tables(db_metadata, target_db_key, selected_tables)
-
-        if schema_to_use.startswith("Error:"):
-            logger.error(f"Could not get valid schemas for selected tables: {schema_to_use}")
-            return f"Sorry, couldn't retrieve valid schema details for the selected tables ({', '.join(selected_tables)}) in the {target_db_key} database: {schema_to_use}"
-
-        # --- Connect to DB --- #
-        logger.info(f"Connecting to database: {target_db_path} for key: {target_db_key}")
-        deps = AgentDependencies.create().with_db(db_path=target_db_path)
-        if not deps.db_connection:
-            return f"Sorry, I couldn't connect to the {target_db_key} database at {target_db_path}."
-        logger.info("Database connection successful.")
-
-        # --- Prepare and Run Main Query Agent --- #
-        logger.info("Preparing and running Main Query Agent (within post-confirmation flow)...")
-        usage = Usage() # Initialize usage tracking for this run
-
-        # Construct the prompt message
-        prompt_message = f"""Target Database: {target_db_key}
-Database Schema (Full schema for selected tables):
+Based *only* on the user query and the full schema provided, prune the schema string to include only essential columns. Output the pruned schema string and explanation.'''
+            try:
+                global google_api_key
+                try:
+                    genai.configure(api_key=google_api_key)
+                    logger.info("Configured GenAI SDK within column pruning.")
+                except Exception as config_err:
+                    logger.error(f"Failed to configure GenAI SDK for column pruning: {config_err}", exc_info=True)
+                    raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
+                gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash")
+                local_llm_prune = GeminiModel(model_name=gemini_model_name)
+                agent_config_prune = create_column_prune_agent_blueprint()
+                agent_instance_prune = Agent(local_llm_prune, **agent_config_prune)
+                pruning_agent_result = await agent_instance_prune.run(pruning_prompt)
+                if hasattr(pruning_agent_result, 'data') and isinstance(pruning_agent_result.data, PrunedSchemaResult):
+                    pruned_schema_string = pruning_agent_result.data.pruned_schema_string
+                    pruning_explanation = pruning_agent_result.data.explanation
+                    logger.info(f"Column Pruning Agent successful. Explanation: {pruning_explanation}")
+                else:
+                    logger.warning(f"Column Pruning Agent returned unexpected structure: {pruning_agent_result}. Proceeding with FULL schema.")
+                    pruned_schema_string = full_schema_for_pruning
+                    assistant_chat_message = {"role": "assistant", "content": f"Note: Could not prune the schema effectively, proceeding with full schema for selected tables."}
+            except Exception as prune_e:
+                logger.exception("Error running Column Pruning Agent:")
+                pruned_schema_string = full_schema_for_pruning
+                if assistant_chat_message:
+                    assistant_chat_message["content"] += f"\nError during schema pruning: {str(prune_e)}. Proceeding with full schema."
+                else:
+                    assistant_chat_message = {"role": "assistant", "content": f"Warning: Encountered an error during schema pruning ({str(prune_e)}). Proceeding with the full schema for selected tables."}
+        # Step 3: Run Main Query Agent with Pruned (or Full) Schema
+        with st.spinner("Generating SQL and analysis with Main Query Agent..."):
+            # --- Instantiate Model and Query Agent Locally --- #
+            logger.info("Instantiating LLM/Agent for post-confirmation query...")
+            try:
+                genai.configure(api_key=google_api_key)
+                logger.info("Configured GenAI SDK within post-confirmation flow.")
+            except Exception as config_err:
+                logger.error(f"Failed to configure GenAI SDK post-confirmation: {config_err}", exc_info=True)
+                return {"role": "assistant", "content": f"Internal Error: Failed to configure AI Service ({config_err})."}
+            gemini_model_name = st.secrets.get("GEMINI_MAIN_MODEL", "gemini-1.5-pro")
+            local_llm = GeminiModel(model_name=gemini_model_name)
+            agent_config_bp = create_query_agent_blueprint()
+            local_query_agent = Agent(
+                local_llm,
+                deps_type=agent_config_bp["deps_type"],
+                result_type=agent_config_bp["result_type"],
+                name=agent_config_bp["name"],
+                retries=agent_config_bp["retries"],
+            )
+            local_query_agent.system_prompt(agent_config_bp["system_prompt_func"])
+            for tool_func in agent_config_bp["tools"]:
+                local_query_agent.tool(tool_func)
+            local_query_agent.result_validator(agent_config_bp["result_validator_func"])
+            logger.info("Query agent created locally for post-confirmation flow.")
+            schema_to_use = pruned_schema_string
+            with st.spinner("Connecting to database..."):
+                logger.info(f"Connecting to database: {target_db_path} for key: {target_db_key}")
+                deps = AgentDependencies.create().with_db(db_path=target_db_path)
+                if not deps.db_connection:
+                    return {"role": "assistant", "content": f"Sorry, I couldn't connect to the {target_db_key} database at {target_db_path}."}
+                logger.info("Database connection successful.")
+            usage = Usage()
+            prompt_message = f'''Target Database: {target_db_key}
+Pruned Database Schema (Only essential columns for the query):
 {schema_to_use}
 
-User Request: {user_message}"""
-
-        # Add visualization hint if needed
-        # ... (visualization hint logic remains the same) ...
-        visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram', 'line graph', 'scatter plot']
-        is_visualization_request = any(keyword in user_message.lower() for keyword in visualization_keywords)
-        if is_visualization_request:
-            logger.info("Adding visualization instructions to prompt.")
-            prompt_message += f"""
-
-IMPORTANT: This is a visualization request for the {target_db_key} database.
-1. Generate the appropriate SQL query to retrieve the necessary data from the provided schema (remember to CAST text numbers if needed for aggregation).
-2. In your text response, you MUST suggest an appropriate chart type (e.g., "bar chart", "line chart", "pie chart") based on the user's request and the data.
-3. Do NOT generate Python code for plotting (e.g., using matplotlib or seaborn). Only generate Python code if data *preparation* (like setting index, renaming) beyond the SQL query is needed for the suggested chart.
-"""
-        else:
-            logger.info("Standard (non-visualization) request.")
-
-        logger.info("==== AI CALL (Query Agent, post-confirmation) ====")
-        logger.debug(f"Sending prompt message to AI:\n{prompt_message}") # Debug level
-        logger.info("==============================")
-
-        # FIX: Filter and validate message history to prevent assert_never error
-        filtered_history = []
-        if agent_message_history:
-            logger.info(f"Filtering message history (length: {len(agent_message_history)}) for compatibility")
-            for msg in agent_message_history:
-                # Only include messages with valid role and content fields
-                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                    filtered_role = msg['role']
-                    if filtered_role in ['user', 'assistant', 'system']:
-                        filtered_history.append({
-                            'role': filtered_role,
-                            'content': str(msg['content'])  # Ensure content is string
-                        })
-                    else:
-                        logger.warning(f"Skipping message with invalid role: {filtered_role}")
-                else:
-                    logger.warning(f"Skipping invalid message format: {type(msg)}")
-            
-            logger.info(f"Filtered message history from {len(agent_message_history)} to {len(filtered_history)} valid entries")
-        
-        # Use filtered history or skip history parameter if empty
-        message_history_param = filtered_history if filtered_history else None
-        
-        # Run query agent
-        try:
-            logger.info(f"Running agent with {len(filtered_history) if filtered_history else 'no'} history messages")
-            agent_run_result = await local_query_agent.run(
-                prompt_message,
-                deps=deps,
-                usage=usage,
-                usage_limits=DEFAULT_USAGE_LIMITS,
-                message_history=message_history_param
-            )
-            run_duration = time.time() - start_inner_time
-            logger.info(f"Query Agent call completed post-confirmation. Duration: {run_duration:.2f}s. Result type: {type(agent_run_result)}")
-        except Exception as e:
-            logger.error(f"Agent.run() failed: {str(e)}", exc_info=True)
-            if "Expected code to be unreachable" in str(e):
-                logger.warning("Caught assert_never error in pydantic_ai. Retrying without message history.")
-                # Fall back to running without message history
+User Request: {user_message}'''
+            visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram', 'line graph', 'scatter plot']
+            is_visualization_request = any(keyword in user_message.lower() for keyword in visualization_keywords)
+            if is_visualization_request:
+                logger.info("Adding visualization instructions to prompt.")
+                prompt_message += f"""
+\nIMPORTANT: This is a visualization request for the {target_db_key} database.\n1. Generate the appropriate SQL query to retrieve the necessary data from the provided schema (remember to CAST text numbers if needed for aggregation).\n2. In your text response, you MUST suggest an appropriate chart type (e.g., \"bar chart\", \"line chart\", \"pie chart\") based on the user's request and the data.\n3. Do NOT generate Python code for plotting (e.g., using matplotlib or seaborn). Only generate Python code if data *preparation* (like setting index, renaming) beyond the SQL query is needed for the suggested chart.\n"""
+            else:
+                logger.info("Standard (non-visualization) request.")
+            filtered_history = []
+            if agent_message_history:
+                logger.info(f"Filtering message history (length: {len(agent_message_history)}) for compatibility")
+                for msg in agent_message_history:
+                    if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        filtered_role = msg['role']
+                        if filtered_role in ['user', 'assistant', 'system']:
+                            filtered_history.append({
+                                'role': filtered_role,
+                                'content': str(msg['content'])
+                            })
+                logger.info(f"Filtered message history from {len(agent_message_history)} to {len(filtered_history)} valid entries")
+            message_history_param = filtered_history if filtered_history else None
+            try:
+                logger.info(f"Running agent with {len(filtered_history) if filtered_history else 'no'} history messages")
                 agent_run_result = await local_query_agent.run(
                     prompt_message,
                     deps=deps,
                     usage=usage,
-                    usage_limits=DEFAULT_USAGE_LIMITS
-                    # No message_history parameter
+                    usage_limits=DEFAULT_USAGE_LIMITS,
+                    message_history=message_history_param
                 )
                 run_duration = time.time() - start_inner_time
-                logger.info(f"Query Agent retry (without history) completed. Duration: {run_duration:.2f}s. Result type: {type(agent_run_result)}")
-            else:
-                # Re-raise if it's not the expected error
-                raise
-
-        # Log token usage
-        # ... (usage logging logic remains the same) ...
-        try:
-            if hasattr(agent_run_result, 'usage'):
-                usage_data = agent_run_result.usage() if callable(agent_run_result.usage) else agent_run_result.usage
-                if usage_data and hasattr(usage_data, 'prompt_tokens'): # Check attributes exist
-                    prompt_tokens = getattr(usage_data, 'prompt_tokens', 'N/A')
-                    completion_tokens = getattr(usage_data, 'completion_tokens', 'N/A')
-                    total_tokens = getattr(usage_data, 'total_tokens', 'N/A')
-                    logger.info(f"Token Usage (this call): Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}")
-                    # Update cumulative usage if needed (though maybe less critical now)
-                    # st.session_state.cumulative_usage += usage_data # Assuming cumulative_usage state exists
+                logger.info(f"Query Agent call completed post-confirmation. Duration: {run_duration:.2f}s. Result type: {type(agent_run_result)}")
+            except Exception as e:
+                logger.error(f"Agent.run() failed: {str(e)}", exc_info=True)
+                if "Expected code to be unreachable" in str(e):
+                    logger.warning("Caught assert_never error in pydantic_ai. Retrying without message history.")
+                    agent_run_result = await local_query_agent.run(
+                        prompt_message,
+                        deps=deps,
+                        usage=usage,
+                        usage_limits=DEFAULT_USAGE_LIMITS
+                    )
+                    run_duration = time.time() - start_inner_time
+                    logger.info(f"Query Agent retry (without history) completed. Duration: {run_duration:.2f}s. Result type: {type(agent_run_result)}")
                 else:
-                    logger.warning("Could not log token usage: 'Usage' object has no attribute 'prompt_tokens' or similar.")
+                    raise
+            st.session_state.last_result = agent_run_result
+            if hasattr(agent_run_result, 'new_messages'):
+                new_msgs = agent_run_result.new_messages()
+                valid_new_msgs = []
+                for msg in new_msgs:
+                    if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        if msg['role'] in ['user', 'assistant', 'system']:
+                            valid_new_msgs.append({
+                                'role': msg['role'],
+                                'content': str(msg['content'])
+                            })
+                st.session_state.agent_message_history.extend(valid_new_msgs)
+                logger.info(f"Appended {len(valid_new_msgs)} validated new messages to agent_message_history (new total: {len(st.session_state.agent_message_history)}).")
             else:
-                logger.info("Token Usage information not available in agent result.")
-        except Exception as usage_err:
-            logger.warning(f"Could not log token usage: {usage_err}", exc_info=False)
-
-
-        st.session_state.last_result = agent_run_result # Store for potential debug
-
-        # Append new messages to cumulative history for future calls
-        if hasattr(agent_run_result, 'new_messages'):
-            new_msgs = agent_run_result.new_messages()
-            # Filter new messages before adding to history
-            valid_new_msgs = []
-            for msg in new_msgs:
-                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                    if msg['role'] in ['user', 'assistant', 'system']:
-                        valid_new_msgs.append({
-                            'role': msg['role'],
-                            'content': str(msg['content'])
-                        })
-            
-            st.session_state.agent_message_history.extend(valid_new_msgs)
-            logger.info(f"Appended {len(valid_new_msgs)} validated new messages to agent_message_history (new total: {len(st.session_state.agent_message_history)}).")
-        else:
-             logger.warning("Agent result object does not have 'new_messages' attribute.")
-
-        # --- Process Query Agent Response --- #
-        logger.info("Processing Query Agent response (after confirmation)...")
-        if hasattr(agent_run_result, 'data') and isinstance(agent_run_result.data, QueryResponse):
-            response: QueryResponse = agent_run_result.data
-            logger.info("Agent response has expected QueryResponse structure.")
-            logger.debug(f"AI Response Data: {response}")
-
-            # Construct the base assistant message
-            base_assistant_message = {"role": "assistant", "content": f"[{target_db_key}] {response.text_message}"}
-            logger.info(f"Base assistant message: {base_assistant_message['content'][:100]}...")
-
-            sql_results_df = None # Initialize DataFrame variable
-            sql_info = {} # Initialize SQL info dict
-
-            # --- Handle SQL Result ---
-            if response.sql_result:
-                sql_query = response.sql_result.sql_query
-                logger.info(f"SQL query generated: {sql_query[:100]}...")
-                logger.info(f"Executing SQL query against {target_db_key}...")
-
-                # Create a minimal context for the execute_sql tool - IMPORTANT: Pass model instance
-                sql_run_context = RunContext(
-                    deps=deps, model=local_llm, usage=usage, prompt=sql_query
-                )
-                sql_execution_result = await execute_sql(sql_run_context, sql_query)
-
-                sql_info = {
-                    "query": sql_query,
-                    "explanation": response.sql_result.explanation
-                }
-                if isinstance(sql_execution_result, str): # Error occurred
-                    sql_info["error"] = sql_execution_result
-                    logger.error(f"SQL execution failed: {sql_execution_result}")
-                    base_assistant_message["content"] += f"\n\n**Warning:** There was an error executing the SQL query: `{sql_execution_result}`"
-                    sql_results_df = pd.DataFrame() # Empty DF on error
-                elif isinstance(sql_execution_result, list):
-                    if sql_execution_result:
-                        logger.info(f"SQL execution successful, {len(sql_execution_result)} rows returned.")
-                        try:
-                            sql_results_df = pd.DataFrame(sql_execution_result)
-                            # Try converting numeric-like text columns (like currency)
-                            for col in sql_results_df.columns:
-                                if isinstance(sql_results_df[col].iloc[0], str):
-                                     # Basic check for patterns like "123.45" or "-12.3"
-                                    if sql_results_df[col].str.match(r'^-?\d+(\.\d+)?$').all():
-                                        try:
-                                            sql_results_df[col] = pd.to_numeric(sql_results_df[col])
-                                            logger.info(f"Converted column '{col}' to numeric.")
-                                        except ValueError:
-                                            logger.warning(f"Could not convert column '{col}' to numeric despite pattern match.")
-                            sql_info["results"] = sql_results_df.to_dict('records') # Store results for display
-                            sql_info["columns"] = list(sql_results_df.columns)
-                            st.session_state.last_chartable_data = sql_results_df # Store for potential follow-up
-                            st.session_state.last_chartable_db_key = target_db_key
-                            logger.info(f"Stored chartable data (shape: {sql_results_df.shape}) for DB '{target_db_key}'.")
-                        except Exception as df_e:
-                            logger.error(f"Error creating/processing DataFrame from SQL results: {df_e}", exc_info=True)
-                            sql_info["error"] = f"Error processing SQL results into DataFrame: {df_e}"
-                            sql_results_df = pd.DataFrame()
-                    else:
-                        logger.info("SQL execution successful, 0 rows returned.")
-                        sql_info["results"] = [] # Empty results
-                        sql_results_df = pd.DataFrame() # Ensure df is an empty DataFrame
-                        st.session_state.last_chartable_data = None # Clear chartable if no results
-                        st.session_state.last_chartable_db_key = None
-                else:
-                     sql_info["error"] = "Unexpected result type from SQL execution."
-                     logger.error(f"{sql_info['error']} Type: {type(sql_execution_result)}")
-                     sql_results_df = pd.DataFrame()
-
-                base_assistant_message["sql_result"] = sql_info
-                logger.info("Added sql_result block to assistant message.")
-            else:
-                logger.info("No SQL query was generated by the agent.")
-                st.session_state.last_chartable_data = None # Clear chartable if no SQL
-                st.session_state.last_chartable_db_key = None
-
-            # Initialize df_for_chart with SQL results (or empty if failed/no results)
-            df_for_chart = sql_results_df if sql_results_df is not None else pd.DataFrame()
-            python_info = {} # Initialize python info dict
-
-            # --- Handle Python Result ---
-            if response.python_result:
-                logger.info("Python code generated for data preparation...")
-                python_code = response.python_result.python_code
-                python_info = {
-                    "code": python_code,
-                    "explanation": response.python_result.explanation
-                }
-                logger.info(f"Python code to execute:\n{python_code}")
-
-                # Prepare local variables for exec
-                local_vars = {
-                    'pd': pd,
-                    'np': np,
-                    'df': df_for_chart.copy() # Pass a copy of the SQL results DF
-                }
-
-                # --- Execute Python Code Safely ---
-                # Avoid using 'st' or other potentially harmful modules inside exec
-                try:
-                    # Use restricted globals dictionary for safety
-                    exec(python_code, {"pd": pd, "np": np}, local_vars)
-                    if 'df' in local_vars and isinstance(local_vars['df'], pd.DataFrame):
-                        df_for_chart = local_vars['df'] # Update df_for_chart with result
-                        logger.info(f"Python data preparation executed. DataFrame shape after exec: {df_for_chart.shape}")
-                        st.session_state.last_chartable_data = df_for_chart # Update chartable data
-                        logger.info("Updated last_chartable_data with DataFrame from Python exec.")
-                    else:
-                        logger.warning(f"'df' variable after Python code is missing or not a DataFrame. Type: {type(local_vars.get('df'))}")
-                        python_info["warning"] = "Python code did not produce or update a DataFrame named 'df'."
-
-                except Exception as e:
-                    logger.error(f"Error executing Python data preparation code: {e}\nCode:\n{python_code}", exc_info=True)
-                    python_info["error"] = str(e)
-                    base_assistant_message["content"] += f"\n\n**Warning:** There was an error executing the provided Python code: `{e}`"
-
-                base_assistant_message["python_result"] = python_info
-                logger.info("Added python_result block to assistant message.")
-
-
-            # --- Determine Chart Type and Prepare Chart Data ---
-            chart_type = None
-            if df_for_chart is not None and not df_for_chart.empty:
-                text_lower = response.text_message.lower()
-                # ... (chart type detection logic remains the same) ...
-                if "bar chart" in text_lower: chart_type = "bar"
-                elif "line chart" in text_lower: chart_type = "line"
-                elif "area chart" in text_lower: chart_type = "area"
-                elif "scatter plot" in text_lower or "scatter chart" in text_lower: chart_type = "scatter"
-                elif "pie chart" in text_lower: chart_type = "pie"
-
-                if chart_type:
-                    logger.info(f"Detected chart type suggestion: {chart_type}")
-                    df_display_chart = df_for_chart # Start with potentially Python-modified DF
-                    try:
-                        # ... (DataFrame preparation for display remains the same) ...
-                        if chart_type != "pie" and df_display_chart.index.name is None and len(df_display_chart.columns) > 1:
-                            potential_index_col = df_display_chart.columns[0]
-                            col_dtype = df_display_chart[potential_index_col].dtype
-                            if pd.api.types.is_string_dtype(col_dtype) or \
-                               pd.api.types.is_categorical_dtype(col_dtype) or \
-                               pd.api.types.is_datetime64_any_dtype(col_dtype):
-                                logger.info(f"Attempting to automatically set DataFrame index to '{potential_index_col}' for charting.")
-                                df_display_chart = df_display_chart.copy().set_index(potential_index_col) # Use copy
-                                logger.info("Index set successfully for chart display.")
-                            else:
-                                logger.info(f"First column '{potential_index_col}' (type: {col_dtype}) not suitable for index, using original DataFrame for chart.")
+                logger.warning("Agent result object does not have 'new_messages' attribute.")
+            logger.info("Processing Query Agent response (after confirmation)...")
+            if hasattr(agent_run_result, 'data') and isinstance(agent_run_result.data, QueryResponse):
+                response: QueryResponse = agent_run_result.data
+                logger.info("Agent response has expected QueryResponse structure.")
+                logger.debug(f"AI Response Data: {response}")
+                base_assistant_message = {"role": "assistant", "content": f"[{target_db_key}] {response.text_message}"}
+                logger.info(f"Base assistant message: {base_assistant_message['content'][:100]}...")
+                sql_results_df = None
+                sql_info = {}
+                if response.sql_result:
+                    sql_query = response.sql_result.sql_query
+                    logger.info(f"SQL query generated: {sql_query[:100]}...")
+                    logger.info(f"Executing SQL query against {target_db_key}...")
+                    sql_run_context = RunContext(
+                        deps=deps, model=local_llm, usage=usage, prompt=sql_query
+                    )
+                    sql_execution_result = await execute_sql(sql_run_context, sql_query)
+                    sql_info = {
+                        "query": sql_query,
+                        "explanation": response.sql_result.explanation
+                    }
+                    if isinstance(sql_execution_result, str):
+                        sql_info["error"] = sql_execution_result
+                        logger.error(f"SQL execution failed: {sql_execution_result}")
+                        base_assistant_message["content"] += f"\n\n**Warning:** There was an error executing the SQL query: `{sql_execution_result}`"
+                        sql_results_df = pd.DataFrame()
+                    elif isinstance(sql_execution_result, list):
+                        if sql_execution_result:
+                            logger.info(f"SQL execution successful, {len(sql_execution_result)} rows returned.")
+                            try:
+                                sql_results_df = pd.DataFrame(sql_execution_result)
+                                for col in sql_results_df.columns:
+                                    if isinstance(sql_results_df[col].iloc[0], str):
+                                        if sql_results_df[col].str.match(r'^-?\d+(\.\d+)?$').all():
+                                            try:
+                                                sql_results_df[col] = pd.to_numeric(sql_results_df[col])
+                                                logger.info(f"Converted column '{col}' to numeric.")
+                                            except ValueError:
+                                                logger.warning(f"Could not convert column '{col}' to numeric despite pattern match.")
+                                sql_info["results"] = sql_results_df.to_dict('records')
+                                sql_info["columns"] = list(sql_results_df.columns)
+                                st.session_state.last_chartable_data = sql_results_df
+                                st.session_state.last_chartable_db_key = target_db_key
+                                logger.info(f"Stored chartable data (shape: {sql_results_df.shape}) for DB '{target_db_key}'.")
+                            except Exception as df_e:
+                                logger.error(f"Error creating/processing DataFrame from SQL results: {df_e}", exc_info=True)
+                                sql_info["error"] = f"Error processing SQL results into DataFrame: {df_e}"
+                                sql_results_df = pd.DataFrame()
                         else:
-                             logger.info("Using original DataFrame for chart (index exists, single col, or pie).")
-
-                        # Store chart type and data for display function
-                        base_assistant_message["streamlit_chart"] = {
-                            "type": chart_type,
-                            "data": df_display_chart # Store the potentially modified/indexed dataframe
-                        }
-                        logger.info(f"Added streamlit_chart block (type: {chart_type}) to assistant message.")
-
-                    except Exception as chart_prep_e:
-                        logger.warning(f"Could not prepare DataFrame for charting: {chart_prep_e}. Chart might not display correctly.", exc_info=True)
-                        base_assistant_message["streamlit_chart"] = {
-                            "type": chart_type,
-                            "data": df_for_chart # Fallback to pre-indexed data
-                        }
-                        base_assistant_message["content"] += f"\n\n**Note:** Could not automatically prepare data for {chart_type} chart: `{chart_prep_e}`"
-
+                            logger.info("SQL execution successful, 0 rows returned.")
+                            sql_info["results"] = []
+                            sql_results_df = pd.DataFrame()
+                            st.session_state.last_chartable_data = None
+                            st.session_state.last_chartable_db_key = None
+                    else:
+                        sql_info["error"] = "Unexpected result type from SQL execution."
+                        logger.error(f"{sql_info['error']} Type: {type(sql_execution_result)}")
+                        sql_results_df = pd.DataFrame()
+                    base_assistant_message["sql_result"] = sql_info
+                    logger.info("Added sql_result block to assistant message.")
                 else:
-                    logger.info("No specific chart type suggestion detected in AI response text.")
+                    logger.info("No SQL query was generated by the agent.")
+                    st.session_state.last_chartable_data = None
+                    st.session_state.last_chartable_db_key = None
+                df_for_chart = sql_results_df if sql_results_df is not None else pd.DataFrame()
+                python_info = {}
+                if response.python_result:
+                    logger.info("Python code generated for data preparation...")
+                    python_code = response.python_result.python_code
+                    python_info = {
+                        "code": python_code,
+                        "explanation": response.python_result.explanation
+                    }
+                    logger.info(f"Python code to execute:\n{python_code}")
+                    local_vars = {
+                        'pd': pd,
+                        'np': np,
+                        'df': df_for_chart.copy()
+                    }
+                    try:
+                        exec(python_code, {"pd": pd, "np": np}, local_vars)
+                        if 'df' in local_vars and isinstance(local_vars['df'], pd.DataFrame):
+                            df_for_chart = local_vars['df']
+                            logger.info(f"Python data preparation executed. DataFrame shape after exec: {df_for_chart.shape}")
+                            st.session_state.last_chartable_data = df_for_chart
+                            logger.info("Updated last_chartable_data with DataFrame from Python exec.")
+                        else:
+                            logger.warning(f"'df' variable after Python code is missing or not a DataFrame. Type: {type(local_vars.get('df'))}")
+                            python_info["warning"] = "Python code did not produce or update a DataFrame named 'df'."
+                    except Exception as e:
+                        logger.error(f"Error executing Python data preparation code: {e}\nCode:\n{python_code}", exc_info=True)
+                        python_info["error"] = str(e)
+                        base_assistant_message["content"] += f"\n\n**Warning:** There was an error executing the provided Python code: `{e}`"
+                    base_assistant_message["python_result"] = python_info
+                    logger.info("Added python_result block to assistant message.")
+                chart_type = None
+                if df_for_chart is not None and not df_for_chart.empty:
+                    text_lower = response.text_message.lower()
+                    if "bar chart" in text_lower: chart_type = "bar"
+                    elif "line chart" in text_lower: chart_type = "line"
+                    elif "area chart" in text_lower: chart_type = "area"
+                    elif "scatter plot" in text_lower or "scatter chart" in text_lower: chart_type = "scatter"
+                    elif "pie chart" in text_lower: chart_type = "pie"
+                    if chart_type:
+                        logger.info(f"Detected chart type suggestion: {chart_type}")
+                        df_display_chart = df_for_chart
+                        try:
+                            if chart_type != "pie" and df_display_chart.index.name is None and len(df_display_chart.columns) > 1:
+                                potential_index_col = df_display_chart.columns[0]
+                                col_dtype = df_display_chart[potential_index_col].dtype
+                                if pd.api.types.is_string_dtype(col_dtype) or \
+                                   pd.api.types.is_categorical_dtype(col_dtype) or \
+                                   pd.api.types.is_datetime64_any_dtype(col_dtype):
+                                    logger.info(f"Attempting to automatically set DataFrame index to '{potential_index_col}' for charting.")
+                                    df_display_chart = df_display_chart.copy().set_index(potential_index_col)
+                                    logger.info("Index set successfully for chart display.")
+                                else:
+                                    logger.info(f"First column '{potential_index_col}' (type: {col_dtype}) not suitable for index, using original DataFrame for chart.")
+                            else:
+                                 logger.info("Using original DataFrame for chart (index exists, single col, or pie).")
+                            base_assistant_message["streamlit_chart"] = {
+                                "type": chart_type,
+                                "data": df_display_chart
+                            }
+                            logger.info(f"Added streamlit_chart block (type: {chart_type}) to assistant message.")
+                        except Exception as chart_prep_e:
+                            logger.warning(f"Could not prepare DataFrame for charting: {chart_prep_e}. Chart might not display correctly.", exc_info=True)
+                            base_assistant_message["streamlit_chart"] = {
+                                "type": chart_type,
+                                "data": df_for_chart
+                            }
+                            base_assistant_message["content"] += f"\n\n**Note:** Could not automatically prepare data for {chart_type} chart: `{chart_prep_e}`"
+                    else:
+                        logger.info("No specific chart type suggestion detected in AI response text.")
+                else:
+                     logger.info("DataFrame is empty or None, skipping chart generation check.")
+                final_assistant_message_dict = base_assistant_message
+                logger.info("Query Agent response processing complete (post-confirmation).")
             else:
-                 logger.info("DataFrame is empty or None, skipping chart generation check.")
-
-            final_assistant_message_dict = base_assistant_message # Store the complete message dict
-            logger.info("Query Agent response processing complete (post-confirmation).")
-
-        else:
-             # Handle case where agent result is not the expected QueryResponse
-             error_msg = f"Received an unexpected response structure from main Query Agent. Type: {type(agent_run_result)}"
-             logger.error(f"{error_msg}. Content: {agent_run_result}")
-             return f"Sorry, internal issue processing the {target_db_key} database query results. Unexpected AI response format." # Return error string
-
-    # --- Catch specific exceptions like ModelRetry ---
-    except ModelRetry as mr:
-        error_msg = f"Query validation failed after {mr.retries} retries: {str(mr)}"
-        logger.error(error_msg, exc_info=False) # Don't need full traceback for ModelRetry
-        return f"Sorry, I encountered an issue generating the response for {target_db_key} after several attempts: {str(mr)}" # Return error string
-
-    # --- Catch broader exceptions during agent run/processing ---
+                error_msg = f"Received an unexpected response structure from main Query Agent. Type: {type(agent_run_result)}"
+                logger.error(f"{error_msg}. Content: {agent_run_result}")
+                return {"role": "assistant", "content": f"Sorry, internal issue processing the {target_db_key} database query results. Unexpected AI response format."}
     except Exception as agent_e:
         error_msg = f"An error occurred during main query agent processing: {str(agent_e)}"
         logger.exception("Error during query agent execution or response processing (post-confirmation):")
-        return f"Sorry, I encountered an error generating the response for the {target_db_key} database: {str(agent_e)}" # Return error string
-
-    # --- Catch exceptions during the setup (DB connection, schema formatting etc.) ---
-    except Exception as setup_e:
-        error_msg = f"A critical error occurred during post-confirmation processing setup: {str(setup_e)}"
-        logger.exception("Critical error in run_agents_post_confirmation_inner setup:")
-        return f"Sorry, a critical error occurred before processing your request: {str(setup_e)}" # Return error string
-
+        return {"role": "assistant", "content": f"Sorry, I encountered an error generating the response for the {target_db_key} database: {str(agent_e)}"}
     finally:
-        # --- Ensure Cleanup ---
         if deps:
             logger.info("Cleaning up database connection from run_agents_post_confirmation_inner.")
-            await deps.cleanup() # Await the async cleanup
-
+            await deps.cleanup()
         logger.info(f"run_agents_post_confirmation_inner finished. Total duration: {time.time() - start_inner_time:.2f}s")
-
-    # If we reach here without returning an error string, return the message dictionary
     if final_assistant_message_dict:
         return final_assistant_message_dict
     else:
-        # Fallback if something went wrong and no error string was returned but dict is missing
         logger.error("run_agents_post_confirmation_inner finished unexpectedly without a result dictionary or error string.")
-        return "Sorry, an unexpected internal error occurred during processing."
+        return {"role": "assistant", "content": "Sorry, an unexpected internal error occurred during processing."}
 
 
-async def continue_after_table_confirmation():
+def continue_after_table_confirmation():
     """
     Coordinates the logic flow *after* the user confirms table selection.
-    Calls the inner function to run the main query agent.
+    Calls the inner function to run the main query agent (now handles all steps).
     Handles appending the result/error message to the chat history.
     """
     start_time = time.time()
@@ -1299,71 +1262,51 @@ async def continue_after_table_confirmation():
         st.error("Internal error: No confirmed tables found to continue processing.")
         clear_pending_state() # Clean up
         return
-
-    # Retrieve necessary info from session state
     db_metadata = st.session_state.get("pending_db_metadata")
     target_db_key = st.session_state.get("pending_target_db_key")
     target_db_path = st.session_state.get("pending_target_db_path")
     message = st.session_state.get("pending_user_message")
     selected_tables = st.session_state.get("confirmed_tables", [])
-    agent_history = st.session_state.agent_message_history # Get current agent history
-
-    if not all([db_metadata, target_db_key, target_db_path, message, selected_tables is not None]): # Check selected_tables exists
-         logger.error("Missing required data in session state for continue_after_table_confirmation.")
-         st.error("Internal error: Missing context to continue processing your request.")
-         clear_pending_state()
-         return
-
+    agent_history = st.session_state.agent_message_history
+    if not all([db_metadata, target_db_key, target_db_path, message, selected_tables is not None]):
+        logger.error("Missing required data in session state for continue_after_table_confirmation.")
+        st.error("Internal error: Missing context to continue processing your request.")
+        clear_pending_state()
+        return
     logger.info(f"Continuing with DB: {target_db_key}, Path: {target_db_path}, Tables: {selected_tables}, Query: '{message[:50]}...'")
-
-    assistant_chat_message = None # Initialize
+    assistant_chat_message = None
     try:
-        # Directly await the inner async function which handles the core logic
-        result = await run_agents_post_confirmation_inner(
-            db_metadata=db_metadata,
-            target_db_key=target_db_key,
-            target_db_path=target_db_path,
-            selected_tables=selected_tables,
-            user_message=message,
-            agent_message_history=agent_history # Pass history
-        )
-
-        # Check the result type from the inner function
+        with st.spinner("Processing your request..."):
+            result = run_async(run_agents_post_confirmation_inner(
+                db_metadata=db_metadata,
+                selected_tables=selected_tables,
+                target_db_key=target_db_key,
+                target_db_path=target_db_path,
+                user_message=message,
+                agent_message_history=agent_history
+            ))
         if isinstance(result, dict):
-            assistant_chat_message = result # Success, got the message dict
+            assistant_chat_message = result
             logger.info("run_agents_post_confirmation_inner completed successfully, obtained message dict.")
         elif isinstance(result, str):
-             # An error occurred, inner function returned an error message string
-             logger.error(f"run_agents_post_confirmation_inner returned an error message: {result}")
-             # Create a standard assistant error message structure
-             assistant_chat_message = {"role": "assistant", "content": result}
+            logger.error(f"run_agents_post_confirmation_inner returned an error message: {result}")
+            assistant_chat_message = {"role": "assistant", "content": result}
         else:
-             # Should not happen
-             logger.error(f"run_agents_post_confirmation_inner returned an unexpected type: {type(result)}")
-             assistant_chat_message = {"role": "assistant", "content": "Sorry, an unexpected internal error occurred during processing."}
-
+            logger.error(f"run_agents_post_confirmation_inner returned an unexpected type: {type(result)}")
+            assistant_chat_message = {"role": "assistant", "content": "Sorry, an unexpected internal error occurred during processing."}
     except Exception as e:
-        # Catch errors from awaiting the inner function itself (less likely now)
         error_msg = f"A critical error occurred running the post-confirmation agents: {str(e)}"
         logger.exception("Critical error in continue_after_table_confirmation while awaiting inner function:")
-        if not assistant_chat_message: # Create error message if not already set
+        if not assistant_chat_message:
             assistant_chat_message = {"role": "assistant", "content": f"Sorry, a critical error occurred: {str(e)}"}
-
-    # --- Append the final message to history --- #
     if assistant_chat_message:
         st.session_state.chat_history.append(assistant_chat_message)
         logger.info(f"Assistant message appended to history in continue_after_table_confirmation. Content: {str(assistant_chat_message.get('content'))[:100]}...")
     else:
         logger.error("continue_after_table_confirmation finished without an assistant message object to append.")
-        # Append a generic error if needed, though should be handled above
         if not st.session_state.chat_history or st.session_state.chat_history[-1].get("role") != "assistant":
             st.session_state.chat_history.append({"role": "assistant", "content": "Sorry, an internal error occurred, and no response could be generated."})
-
-
-    # --- Clean up pending state --- #
-    # IMPORTANT: Clear state *after* processing is complete (success or failure)
     clear_pending_state()
-
     logger.info(f"continue_after_table_confirmation finished. Duration: {time.time() - start_time:.2f}s")
 
 
@@ -1398,7 +1341,18 @@ def run_async(coro):
         asyncio.set_event_loop(loop)
         # Apply nest_asyncio here too if creating a new loop
         nest_asyncio.apply(loop)
-
+    # Fix: Only log if coro is not None and has __name__
+    try:
+        if coro is not None and hasattr(coro, '__name__'):
+            logger.debug(f"Running coroutine {coro.__name__} using loop.run_until_complete...")
+        else:
+            logger.debug("Running coroutine using loop.run_until_complete...")
+        result = loop.run_until_complete(coro)
+        logger.debug("Coroutine execution completed.")
+        return result
+    except Exception as e:
+        logger.exception(f"Exception caught by run_async while running coroutine: {e}")
+        raise e
     # Ensure nest_asyncio is applied to the loop we are using
     # nest_asyncio.apply(loop) # Already applied globally, might be redundant but safe
     # logger.debug("Applied nest_asyncio within run_async.")
