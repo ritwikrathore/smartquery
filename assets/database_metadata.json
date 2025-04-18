@@ -1,187 +1,501 @@
 {
     "description": "Metadata for multiple World Bank Group databases.",
     "databases": {
-        "IFC": {
-            "database_name": "IFC_Investments",
-            "database_path": "assets/IFC.sqlite",
-            "description": "Contains information about investment and advisory services projects provided by the International Finance Corporation (IFC). IFC, a member of the World Bank Group, is the largest global development institution focused on the private sector in developing countries. IFC is a dynamic organization, constantly adjusting to the evolving needs of our clients in emerging markets. IFC seeks to provide accurate and timely information regarding our investment and advisory services activities to clients, partners, stakeholders.",
+        "ibrd": {
+            "database_path": "assets/dbs/ibrd.db",
             "tables": {
-                "investment_services_projects": {
-                    "description": "Details about specific IFC investment projects.",
+                "ibrd_lending": {
+                    "description": "Details for ibrd_lending. Latest available data on Loans and Guarantees provided since inception. Note: IDs starting with IBRDB and IBRDG are 'Guarantees' and the rest are 'Loans'. The International Bank for Reconstruction and Development (IBRD) loans are public and publicly guaranteed debt extended by the World Bank Group. IBRD loans are made to, or guaranteed by, countries / economies that are members of IBRD. IBRD may also make loans to IFC. IBRD lends at market rates. Data are in U.S. dollars calculated using historical rates. This dataset contains the latest available snapshot of the Statement of Loans. The World Bank complies with all sanctions applicable to World Bank transactions.",
                     "columns": {
-                        "Date Disclosed": {
-                            "type": "TEXT",
-                            "description": "The date when the project information was publicly disclosed."
+                        "end_of_period": {
+                            "type": "TIMESTAMP",
+                            "description": "End of Period Date represents the date as of which balances are shown in the report."
                         },
-                        "Project Name": {
+                        "loan_number": {
                             "type": "TEXT",
-                            "description": "The official name of the investment project."
+                            "description": "For IBRD, a loan number consists of the organization prefix (IBRD) and a five-character label that uniquely identifies the loan within the organization. IDs starting with IBRDB and IBRDG are 'Guarantees' and the rest are 'Loans'."
                         },
-                        "Document Type": {
+                        "region": {
                             "type": "TEXT",
-                            "description": "The type of document associated with the disclosure (e.g., Environmental and Social Review Summary)."
+                            "description": "World Bank Region to which country / economy and loan belong. Country / Economy lending is grouped into regions based on the current World Bank administrative (rather than geographic) region where project implementation takes place. The Other Region is used for loans to IFC."
                         },
-                        "Project Number": {
+                        "country_/_economy_code": {
                             "type": "TEXT",
-                            "description": "A unique identifier assigned to the project by IFC."
+                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "Project Url": {
+                        "country_/_economy": {
                             "type": "TEXT",
-                            "description": "URL link to the project details page on the IFC website."
+                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "Product Line": {
+                        "borrower": {
                             "type": "TEXT",
-                            "description": "The type of financial product or service offered (e.g., Loan, Equity, Guarantee)."
+                            "description": "The representative of the borrower to which the Bank loan is made."
                         },
-                        "Company Name": {
+                        "guarantor_country_/_economy_code": {
                             "type": "TEXT",
-                            "description": "The name of the company receiving the investment or advisory service."
+                            "description": "Country / Economy Code of the Guarantor according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "Country": {
+                        "guarantor": {
                             "type": "TEXT",
-                            "description": "The country where the project is located or the company is based."
+                            "description": "The Guarantor guarantees repayment to the Bank if the borrower does not repay."
                         },
-                        "IFC Country Code": {
+                        "loan_type": {
                             "type": "TEXT",
-                            "description": "IFC's internal country code."
+                            "description": "A type of loan/loan instrument for which distinctive accounting and/or other actions need to be performed."
                         },
-                        "Industry": {
+                        "loan_status": {
                             "type": "TEXT",
-                            "description": "The primary industry sector of the project or company."
+                            "description": "The status of the loan."
                         },
-                        "Environmental Category": {
-                            "type": "TEXT",
-                            "description": "IFC's environmental risk category assigned to the project (e.g., A, B, C, FI)."
+                        "interest_rate": {
+                            "type": "REAL",
+                            "description": "(auto-added)"
                         },
-                        "Department": {
-                            "type": "TEXT",
-                            "description": "The IFC department responsible for the project."
-                        },
-                        "Status": {
-                            "type": "TEXT",
-                            "description": "The current status of the project (e.g., Active, Closed, Pending)."
-                        },
-                        "Projected Board Date": {
-                            "type": "TEXT",
-                            "description": "The date the project was originally expected to be presented to the IFC Board."
-                        },
-                        "IFC Approval Date": {
-                            "type": "TEXT",
-                            "description": "The date the project was approved by the IFC Board."
-                        },
-                        "IFC Signed Date": {
-                            "type": "TEXT",
-                            "description": "The date the legal agreements for the project were signed."
-                        },
-                        "IFC Invested Date": {
-                            "type": "TEXT",
-                            "description": "The date IFC's investment was disbursed."
-                        },
-                        "IFC investment for Risk Management(Million USD)": {
-                            "type": "TEXT",
-                            "description": "The amount of IFC investment allocated for risk management products, in millions of USD."
-                        },
-                        "IFC investment for Guarantee(Million USD)": {
-                            "type": "TEXT",
-                            "description": "The amount of IFC investment provided as guarantees, in millions of USD."
-                        },
-                        "IFC investment for Loan(Million USD)": {
-                            "type": "TEXT",
-                            "description": "The amount of IFC investment provided as loans, in millions of USD."
-                        },
-                        "IFC investment for Equity(Million USD)": {
-                            "type": "TEXT",
-                            "description": "The amount of IFC investment provided as equity, in millions of USD."
-                        },
-                        "Total IFC investment as approved by Board(Million USD)": {
-                            "type": "TEXT",
-                            "description": "The total amount of IFC investment approved by the Board across all product types, in millions of USD."
-                        },
-                        "WB Country Code": {
-                            "type": "TEXT",
-                            "description": "World Bank country code."
-                        },
-                        "As of Date": {
-                            "type": "TEXT",
-                            "description": "The date the data snapshot was taken or is valid as of."
-                        }
-                    }
-                }
-            }
-        },
-        "MIGA": {
-            "database_name": "MIGA_Guarantees",
-            "database_path": "assets/MIGA.sqlite",
-            "description": "Contains information about MIGA (Multilateral Investment Guarantee Agency) projects. MIGA provides political risk insurance (guarantees) for projects in a broad range of sectors in developing member countries, covering all regions of the world. MIGA promotes foreign direct investment by providing political risk insurance and credit enhancement to investors and lenders against losses caused by noncommercial risks.",
-            "tables": {
-                "MIGA Summary_Sheet 1": {
-                    "description": "Details for MIGA Summary_Sheet 1 (auto-added)",
-                    "columns": {
-                        "Project Name": {
-                            "type": "TEXT",
-                            "description": "The official name of the MIGA-guaranteed project."
-                        },
-                        "Sector": {
-                            "type": "TEXT",
-                            "description": "The primary industry or economic sector of the project."
-                        },
-                        "Country": {
-                            "type": "TEXT",
-                            "description": "The country where the project is located or the investment is made."
-                        },
-                        "Gross Exposure, US$": {
-                            "type": "TEXT",
-                            "description": "The total potential financial liability or exposure MIGA holds for the project, in US dollars."
-                        },
-                        "Fiscal Year": {
-                            "type": "TEXT",
-                            "description": "The fiscal year relevant to the project guarantee (e.g., year of issuance)."
-                        }
-                    }
-                }
-            }
-        },
-        "IBRD": {
-            "database_path": "assets/ibrd_ida_summary.db",
-            "tables": {
-                "ibrd_ida_summary": {
-                    "description": "Contains information about the International Bank for Reconstruction and Development (IBRD) and the International Development Association (IDA). IBRD lends to governments of middle-income and creditworthy low-income countries. IDA provides interest-free loans – called credits – and grants to governments of the poorest countries. Together, IBRD and IDA make up the World Bank.",
-                    "columns": {
                         "project_id": {
                             "type": "TEXT",
-                            "description": "The unique identifier for the project."
+                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID."
                         },
                         "project_name": {
                             "type": "TEXT",
-                            "description": "The official name of the project."
+                            "description": "Short descriptive project name."
                         },
-                        "product_number": {
+                        "original_principal_amount_usd": {
+                            "type": "REAL",
+                            "description": "The original US dollar amount of the loan that is committed and approved."
+                        },
+                        "cancelled_amount_usd": {
+                            "type": "REAL",
+                            "description": "The portion of the undisbursed balance which has been cancelled (i.e. no longer available for future disbursement). Cancellations include terminations (where approved loan agreements were never signed)."
+                        },
+                        "undisbursed_amount_usd": {
+                            "type": "REAL",
+                            "description": "The amount of a loan commitment that is still available to be drawn down. These currency amounts have been converted to US dollars at the exchange rates applicable at the End of Period date."
+                        },
+                        "disbursed_amount_usd": {
+                            "type": "REAL",
+                            "description": "The amount that has been disbursed from a loan commitment in equivalent US dollars calculated at the exchange rate on the value date of the individual disbursements."
+                        },
+                        "repaid_to_ibrd_usd": {
+                            "type": "REAL",
+                            "description": "Total principal amounts paid or prepaid to IBRD in US dollars, calculated at the exchange rate on the value date of the individual repayments."
+                        },
+                        "due_to_ibrd_usd": {
+                            "type": "REAL",
+                            "description": "Where the exchange adjustment is shown separately, this is the amount disbursed and outstanding expressed as a stock of debt in historical US Dollars. Otherwise, this is the amount due and outstanding as of the End of Period date."
+                        },
+                        "exchange_adjustment_usd": {
+                            "type": "REAL",
+                            "description": "Where the exchange adjustment is shown separately, this is the amount disbursed and outstanding expressed as a stock of debt in historical US Dollars. Otherwise, this is the amount due and outstanding as of the End of Period date."
+                        },
+                        "borrower's_obligation_usd": {
+                            "type": "REAL",
+                            "description": "The Borrower Obligation is the outstanding balance for the loan as of the end of period date in US dollars equivalent. The Borrower's Obligation includes the amounts outstanding Due to 3rd parties."
+                        },
+                        "sold_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Portion of loan sold to a third party."
+                        },
+                        "repaid_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Amount repaid to a third party."
+                        },
+                        "due_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Amount due to a third party."
+                        },
+                        "loans_held_usd": {
+                            "type": "REAL",
+                            "description": "The sum of the disbursed and outstanding amounts (net of repayments, i.e. Due to IBRD) plus undisbursed available amounts."
+                        },
+                        "first_repayment_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which principal repayment starts."
+                        },
+                        "last_repayment_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date specified in the loan/credit agreement (amended for any partial prepayments) on which the last principal installment must be repaid by the Borrower."
+                        },
+                        "agreement_signing_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date specified in the loan/credit agreement (amended for any partial prepayments) on which the last principal installment must be repaid by the Borrower."
+                        },
+                        "board_approval_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date the World Bank approves the loan."
+                        },
+                        "effective_date_most_recent": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which a legal agreement becomes effective, or is expected to become effective."
+                        },
+                        "closed_date_most_recent": {
+                            "type": "TIMESTAMP",
+                            "description": "The date specified in the legal agreement (or extension) after which the Bank may, by notice to the borrower, terminate the right to make withdrawals from the loan account."
+                        },
+                        "last_disbursement_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which the last disbursement was made (prior to the end of period date)."
+                        }
+                    }
+                },
+                "ida_lending": {
+                    "description": "Details for ida_lending. Latest available data on Credits, Grants and Guarantees provided since inception. Note: IDs starting with IDAB and IDAG are 'Guarantees', IDs starting with IDAD, IDAH and IDAE are 'Grants' and the rest are 'Credits'. The International Development Association (IDA) credits are public and publicly guaranteed debt extended by the World Bank Group. IDA provides development credits, grants and guarantees to its recipient member countries / economies to help meet their development needs. Credits from IDA are at concessional rates. Data are in U.S. dollars calculated using historical rates. This dataset contains the latest available snapshot of the IDA Statement of Credits and Grants. The World Bank complies with all sanctions applicable to World Bank transactions.",
+                    "columns": {
+                        "end_of_period": {
+                            "type": "TIMESTAMP",
+                            "description": "End of Period Date represents the date as of which balances are shown in the report."
+                        },
+                        "credit_number": {
                             "type": "TEXT",
-                            "description": "The product number for the project."
+                            "description": "For IDA, credits, grants or guarantee number consists of the organization prefix (IDA) and a five-character label that uniquely identifies the ID within the organization. IDs starting with IDAB and IDAG are 'Guarantees', IDs starting with IDAD, IDAH and IDAE are 'Grants' and the rest are 'Credits'."
                         },
-                        "principal_amount": {
-                            "type": "REAL",
-                            "description": "The principal amount of the project."
+                        "region": {
+                            "type": "TEXT",
+                            "description": "Country / Economy lending is grouped into regions based on the current World Bank administrative (rather than geographic) region where project implementation takes place. The Other Region is used for loans to the IFC."
                         },
-                        "available_amount": {
-                            "type": "REAL",
-                            "description": "The available amount of the project."
+                        "country_/_economy_code": {
+                            "type": "TEXT",
+                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "disbursed_amount": {
+                        "country_/_economy": {
+                            "type": "TEXT",
+                            "description": "Country / Economy to which loan has been issued. Loans to the IFC are included under the country / economy “World”."
+                        },
+                        "borrower": {
+                            "type": "TEXT",
+                            "description": "The representative of the borrower to which the Bank loan is made."
+                        },
+                        "credit_status": {
+                            "type": "TEXT",
+                            "description": "The status of the loan."
+                        },
+                        "service_charge_rate": {
                             "type": "REAL",
-                            "description": "The disbursed amount of the project."
+                            "description": "Current Interest rate or service charge applied to loan. For loans that could have more than one interest rate (e.g. FSL or SCL fixed rate loans), the interest rate is shown as “0”."
+                        },
+                        "currency_of_commitment": {
+                            "type": "TEXT",
+                            "description": "The currency in which a borrower’s loan, credit, grant or trust fund is denominated."
+                        },
+                        "project_id": {
+                            "type": "TEXT",
+                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID."
+                        },
+                        "project_name": {
+                            "type": "TEXT",
+                            "description": "Short descriptive project name."
+                        },
+                        "original_principal_amount_usd": {
+                            "type": "REAL",
+                            "description": "The original US dollar amount of the loan that is committed and approved."
+                        },
+                        "cancelled_amount_usd": {
+                            "type": "REAL",
+                            "description": "The portion of the undisbursed balance which has been cancelled (i.e. no longer available for future disbursement). Cancellations include terminations (where approved loan agreements were never signed)."
+                        },
+                        "undisbursed_amount_usd": {
+                            "type": "REAL",
+                            "description": "The amount of a loan commitment that is still available to be drawn down. These currency amounts have been converted to US dollars at the exchange rates applicable at the End of Period date."
+                        },
+                        "disbursed_amount_usd": {
+                            "type": "REAL",
+                            "description": "The amount that has been disbursed from a loan commitment in equivalent US dollars calculated at the exchange rate on the value date of the individual disbursements."
+                        },
+                        "repaid_to_ida_usd": {
+                            "type": "REAL",
+                            "description": "Total principal amounts paid or prepaid to IDA in US dollars, calculated at the exchange rate on the value date of the individual repayments.Repaid to IDA amounts include amounts written off under the Multilateral Debt Relief Initiative (MDRI)."
+                        },
+                        "due_to_ida_usd": {
+                            "type": "REAL",
+                            "description": "The amount due and outstanding as of the End of Period date."
+                        },
+                        "exchange_adjustment_usd": {
+                            "type": "REAL",
+                            "description": "The increase (decrease) in value of disbursed and outstanding amount due to exchange rate fluctuations; includes exchange adjustments on the amounts Due to 3rd parties."
+                        },
+                        "borrowers_obligation_usd": {
+                            "type": "REAL",
+                            "description": "The Borrower Obligation is the outstanding balance for the loan as of the end of period date in US dollars equivalent. The Borrower's Obligation includes the amounts outstanding Due to 3rd parties."
+                        },
+                        "sold_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Portion of loan sold to a third party."
+                        },
+                        "repaid_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Amount repaid to a third party."
+                        },
+                        "due_3rd_party_usd": {
+                            "type": "REAL",
+                            "description": "Amount due to a third party."
+                        },
+                        "credits_held_usd": {
+                            "type": "REAL",
+                            "description": "The sum of the disbursed and outstanding amounts (net of repayments, i.e. Due to IBRD/IDA) plus undisbursed available amounts."
+                        },
+                        "first_repayment_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which principal repayment starts."
+                        },
+                        "last_repayment_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date specified in the loan/credit agreement (amended for any partial prepayments) on which the last principal installment must be repaid by the Borrower."
+                        },
+                        "agreement_signing_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date the borrower and the Bank sign the loan agreement."
+                        },
+                        "board_approval_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date the World Bank approves the loan."
+                        },
+                        "effective_date_most_recent": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which a legal agreement becomes effective, or is expected to become effective."
+                        },
+                        "closed_date_most_recent": {
+                            "type": "TIMESTAMP",
+                            "description": "The date specified in the legal agreement (or extension) after which the Bank may, by notice to the borrower, terminate the right to make withdrawals from the loan account."
+                        },
+                        "last_disbursement_date": {
+                            "type": "TIMESTAMP",
+                            "description": "The date on which the last disbursement was made (prior to the end of period date)."
+                        }
+                    }
+                }
+            }
+        },
+        "ifc": {
+            "database_path": "assets/dbs/ifc.db",
+            "tables": {
+                "ifc_investments": {
+                    "description": "Details for ifc_investments. List of projects from inception to date. IFC continues to develop new financial products that enable companies to manage risk and broaden their access to foreign and domestic capital markets. Our broad suite of investment services can ease poverty and spur long-term growth by promoting sustainable enterprises, encouraging entrepreneurship, and mobilizing resources that wouldn’t otherwise be available.",
+                    "columns": {
+                        "date_disclosed": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the record was first disclosed."
+                        },
+                        "project_name": {
+                            "type": "TEXT",
+                            "description": "Name of an investment project - discrete unit of work associated with provision of financial product to a client."
+                        },
+                        "document_type": {
+                            "type": "TEXT",
+                            "description": "Type of document."
+                        },
+                        "project_number": {
+                            "type": "INTEGER",
+                            "description": "Numeric code that uniquely identifies a project."
+                        },
+                        "project_url": {
+                            "type": "TEXT",
+                            "description": "URL to the project page."
+                        },
+                        "product_line": {
+                            "type": "TEXT",
+                            "description": "Identifies IFC Financial Product. This is the highest level of classification to be applied to IFC product. Each IFC product must be assigned one and only one product type."
+                        },
+                        "company_name": {
+                            "type": "TEXT",
+                            "description": "Name of the company."
                         },
                         "country": {
                             "type": "TEXT",
-                            "description": "The country to which lending is provided."
+                            "description": "Country where investment and/or advisory services are executed and/or utilized."
+                        },
+                        "ifc_country_code": {
+                            "type": "TEXT",
+                            "description": "Country code according to IFC Code list."
+                        },
+                        "industry": {
+                            "type": "TEXT",
+                            "description": "Name that follows the North American Industry Classification System (NAICS) schema identifying a distinct economic segment, and is the lowest classification level."
+                        },
+                        "environmental_category": {
+                            "type": "TEXT",
+                            "description": "Code indicating nature and extent of environmental and social assessment needed fro investment project as defined in IFC's Policy on Environmental and Social Sustainability."
+                        },
+                        "department": {
+                            "type": "TEXT",
+                            "description": "World Bank Group organizational entity within a Vice Presidency, comprised of one or more units and/or divisions."
                         },
                         "status": {
                             "type": "TEXT",
-                            "description": "The status of the project. Contains values like 'Approved', 'Disbursed', 'Signed', Terminated, Fully Cancelled, Effective, etc."
+                            "description": "Identifies standing/status of a project."
                         },
-                        "approval_date": {
+                        "projected_board_date": {
                             "type": "TIMESTAMP",
-                            "description": "The date the project was approved."
+                            "description": "Summary of Project Information is prepared and distributed to the public in advance of the IFC Board of Directors’ consideration of the proposed transaction. Board dates are estimates only."
+                        },
+                        "ifc_approval_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project was approved by IFC."
+                        },
+                        "ifc_signed_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project was signed by IFC."
+                        },
+                        "ifc_invested_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project was invested by IFC."
+                        },
+                        "ifc_investment_for_risk_managementmillion_-_usd": {
+                            "type": "REAL",
+                            "description": "Risk Management - product designed to hedge the financial risk of IFC client(s) using derivative products."
+                        },
+                        "ifc_investment_for_guaranteemillion_-_usd": {
+                            "type": "REAL",
+                            "description": "Guarantee - promise from one entity to assume responsibility for the payment of a financial obligation of another entity if such other entity fails to perform. A guarantee is a contingent liability of the guarantor."
+                        },
+                        "ifc_investment_for_loanmillion_-_usd": {
+                            "type": "REAL",
+                            "description": "Loans - money advances to a client, to be repaid at a later date, usually with interest and/or fees."
+                        },
+                        "ifc_investment_for_equitymillion_-_usd": {
+                            "type": "REAL",
+                            "description": "Equity - Ownership interest in a corporation or enterprise that represents a claim on the assets of the entity in proportion to the number and class of shares owned."
+                        },
+                        "total_ifc_investment_as_approved_by_boardmillion_-_usd": {
+                            "type": "REAL",
+                            "description": "Sum of project's financial product(s) prior to approval and approved."
+                        },
+                        "wb_country_code": {
+                            "type": "TEXT",
+                            "description": "Country code according to WBG Code list. Might be different from ISO codes."
+                        },
+                        "as_of_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when this snapshot was taken."
+                        }
+                    }
+                },
+                "ifc_advisory": {
+                    "description": "Details for ifc_advisory. Private sector development requires more than just finance. Experience shows the powerful role advisory services can play in unlocking investment and helping businesses expand and create jobs. To help the private sector in emerging markets, IFC provides advice, problem solving, and training to companies, industries, and governments. Our experience shows that companies need more than financial investment to thrive—they need a regulatory environment that enables entrepreneurship, and advice on business best practices. Our work includes advising national and local governments on how to improve their investment climate and strengthen basic infrastructure. Governments account for around half of our advisory projects. We also help investment clients improve corporate governance and become more sustainable.",
+                    "columns": {
+                        "disclosure_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the record was first disclosed."
+                        },
+                        "project_number": {
+                            "type": "INTEGER",
+                            "description": "Numeric code that uniquely identifies a project."
+                        },
+                        "project_name": {
+                            "type": "TEXT",
+                            "description": "Name of an advisory project - discrete unit of work associated with provision of service to a client."
+                        },
+                        "project_url": {
+                            "type": "TEXT",
+                            "description": "Link to a project page on IFC Projects website."
+                        },
+                        "country": {
+                            "type": "TEXT",
+                            "description": "Country where advisory services are executed and/or utilized."
+                        },
+                        "ifc_country_code": {
+                            "type": "TEXT",
+                            "description": "Country code according to IFC Code list."
+                        },
+                        "ifc_region": {
+                            "type": "TEXT",
+                            "description": "Geographic region. The term 'World' describes projects spanning multiple regions."
+                        },
+                        "business_line": {
+                            "type": "TEXT",
+                            "description": "product / business line"
+                        },
+                        "estimated_total_budget_$": {
+                            "type": "REAL",
+                            "description": "Project budget includes all project-funded activities."
+                        },
+                        "department": {
+                            "type": "REAL",
+                            "description": "World Bank Group organizational entity within a Vice Presidency, comprised of one or more units and/or divisions."
+                        },
+                        "status": {
+                            "type": "TEXT",
+                            "description": "Identifies standing/status of a project."
+                        },
+                        "ifc_approval_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project was approved by IFC."
+                        },
+                        "projected_start_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project is expected to start."
+                        },
+                        "wb_country_code": {
+                            "type": "TEXT",
+                            "description": "Country code according to WBG Code list. Might be different from ISO codes."
+                        },
+                        "as_of_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when this snapshot was taken."
+                        }
+                    }
+                }
+            }
+        },
+        "miga": {
+            "database_path": "assets/dbs/miga.db",
+            "tables": {
+                "miga_guarantees": {
+                    "description": "The Multilateral Investment Guarantee Agency (MIGA) was created in 1988 as a member of the World Bank Group to promote foreign direct investment into emerging countries to support economic growth, reduce poverty, and improve people’s lives. MIGA fulfills this mandate by offering political risk insurance (guarantees) to investors and lenders, covering risks including expropriation, breach of contract, currency transfer restriction, war and civil disturbance, and non-honoring of sovereign financial obligations. Project briefs are disclosed after Board consideration and contract signing and reflect the terms of the project at the time of contract signature.",
+                    "columns": {
+                        "issued_fy": {
+                            "type": "INTEGER",
+                            "description": "Year of issuance of the guarantee."
+                        },
+                        "project_id": {
+                            "type": "INTEGER",
+                            "description": "Unique identifier for the project."
+                        },
+                        "project_name": {
+                            "type": "TEXT",
+                            "description": "Name of the project."
+                        },
+                        "host_country": {
+                            "type": "TEXT",
+                            "description": "Country where the project is located."
+                        },
+                        "host_country_code": {
+                            "type": "TEXT",
+                            "description": "Country code according to WBG Code list. Might be different from ISO codes."
+                        },
+                        "host_region": {
+                            "type": "TEXT",
+                            "description": "Region of the host country."
+                        },
+                        "host_region_code": {
+                            "type": "TEXT",
+                            "description": "Region code according to WBG Code list. Might be different from ISO codes."
+                        },
+                        "business_sector": {
+                            "type": "TEXT",
+                            "description": "Sector of the project."
+                        },
+                        "product_line": {
+                            "type": "TEXT",
+                            "description": "Product line of the project."
+                        },
+                        "gross_issued_amount_usd": {
+                            "type": "REAL",
+                            "description": "Gross issued amount in USD."
+                        },
+                        "project_start_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project is expected to start."
+                        },
+                        "project_expiration_date": {
+                            "type": "TIMESTAMP",
+                            "description": "Date when the project is expected to expire."
+                        },
+                        "project_links": {
+                            "type": "TEXT",
+                            "description": "Links to the project."
+                        },
+                        "issued_proj_count": {
+                            "type": "INTEGER",
+                            "description": "Number of projects issued."
                         }
                     }
                 }

@@ -168,7 +168,8 @@ def create_orchestrator_agent_blueprint():
 
 1. ASSISTANT MODE:
    - If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
-   - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
+   - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IBRD and IDA lending data, IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
+   - If the user asks about the dataset, tables, columns, or wants to know what data is available, you have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use this tool to answer questions about the structure, available columns, or descriptions.
    - If the user asks for clarification about the last response, help them as long as it is related to the World Bank database systems or the outputs of the previous database query.
 
 2. DATABASE QUERY MODE:
@@ -178,20 +179,22 @@ def create_orchestrator_agent_blueprint():
 
 3. VISUALIZATION MODE:
    - Set action='visualization' when the user is requesting to visualize or chart previously retrieved data.
+   - you need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
    - When setting action='visualization', include the chart_type (e.g., "bar", "line", "pie", "scatter") in your response.
    - Provide a brief helpful response acknowledging the visualization request, such as "I'll create a bar chart with the data."
 
 4. PYTHON AGENT USAGE:
    - You have access to a Python agent tool for data manipulation and visualization (e.g., using pandas, numpy, or plotting the last DataFrame as a chart).
+   - You need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
    - Use this tool when the user makes a follow-up request to visualize, plot, or chart the previous results, or requests data manipulation in Python.
    - Call the Python agent with the requested operation and any relevant user context.
    - If the tool returns a successful result, respond to the user with the message and chart type or code from the tool's output. If there is an error, inform the user accordingly.
    - Only use this tool if there is previous data available to manipulate or visualize.
+   - IF you determine a query to be a follow-up chart or visualization, set action='visualization' and include the chart type in the response.
 
 5. CONVERSATION MANAGEMENT:
    - Use the conversation history to maintain context.
    - If a follow-up question refers to previous results, treat it as a database query, Python data manipulation, or visualization request or clarification about the last response.
-   - IMPORTANT: Short queries like "show me a bar chart" or "can you visualize this?" after a database query are almost always visualization requests, not new database queries.
 
 Respond ONLY with the structured OrchestratorResult, including the appropriate action type and chart_type if relevant.'''
     }
@@ -450,27 +453,8 @@ def create_column_prune_agent_blueprint():
         "result_type": PrunedSchemaResult,
         "name": "Column Pruning Agent",
         "retries": 2,
-        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.
-
-IMPORTANT: The schema of the database will be provided at the beginning of each user message. Use this schema information to understand the database structure and generate an accurate pruned schema string. DO NOT respond that you need to know the table structure - it is already provided in the message.
-
-CRITICAL RULES FOR SCHEMA PRUNING (Focus on identifying relevant columns):
-1. Identify which columns are needed based on the user's query (e.g., columns mentioned, columns needed for filtering, aggregation, or grouping).
-2. Pay attention to specific column names requested or implied by the query.
-3. Understand the intent of the query and include columns that would be needed to make sense of the query.
-
-YOUR GOAL is to output a concise schema string containing ONLY the necessary tables and columns.
-
-RESPONSE STRUCTURE:
-1. Review the full schema provided.
-2. Analyze the user query to determine essential columns.
-3. Generate the `pruned_schema_string` containing only the required columns.
-4. Provide a brief `explanation` of why these columns were kept.
-5. Format your final response using the 'PrunedSchemaResult' structure.
-
-Do NOT generate SQL queries for the user's request. Do NOT generate Python code.
-Your only task is SCHEMA PRUNING.
-"""
+        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message. Use this schema information to understand the database structure and generate an accurate pruned schema string. DO NOT respond that you need to know the table structure - it is already provided in the message.\n\nYou have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use it if you need to clarify what a table or column means.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Focus on identifying relevant columns):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Understand the Include columns that would be needed to make sense of the query.\n\nYOUR GOAL is to output a concise schema string containing ONLY the necessary tables and columns.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the `pruned_schema_string` containing only the required columns.\n4. Provide a brief `explanation` of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nDo NOT generate SQL queries for the user's request. Do NOT generate Python code.\nYour only task is SCHEMA PRUNING.\n""",
+        "tools": [get_metadata_info],
     }
 
 
@@ -497,6 +481,46 @@ def load_db_metadata(path: Path = METADATA_PATH) -> Optional[Dict]:
         st.error(f"Error loading metadata file {path}: {e}")
         logger.error(f"Error loading metadata file {path}: {e}", exc_info=True)
         return None
+
+# --- NEW: Metadata Info Tool for Agents ---
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+
+class MetadataInfoRequest(BaseModel):
+    db_key: Optional[str] = Field(None, description="Database key to filter (e.g., 'ifc', 'miga', 'ibrd')")
+    table: Optional[str] = Field(None, description="Table name to filter (optional)")
+    column: Optional[str] = Field(None, description="Column name to filter (optional)")
+
+class MetadataInfoResult(BaseModel):
+    info: Any = Field(..., description="The requested metadata information (database, table, or column descriptions, etc.)")
+    message: str = Field(..., description="Human-readable summary of what was returned.")
+
+async def get_metadata_info(ctx: RunContext, request: MetadataInfoRequest) -> MetadataInfoResult:
+    """Tool: Retrieve metadata information about the dataset, tables, or columns. Optionally filter by db_key, table, or column."""
+    metadata = load_db_metadata()
+    if not metadata:
+        return MetadataInfoResult(info=None, message="No metadata available.")
+    db_key = request.db_key
+    table = request.table
+    column = request.column
+    # Drill down as requested
+    if db_key:
+        dbs = metadata.get('databases', {})
+        db = dbs.get(db_key)
+        if not db:
+            return MetadataInfoResult(info=None, message=f"Database key '{db_key}' not found.")
+        if table:
+            tbl = db.get('tables', {}).get(table)
+            if not tbl:
+                return MetadataInfoResult(info=None, message=f"Table '{table}' not found in database '{db_key}'.")
+            if column:
+                col = tbl.get('columns', {}).get(column)
+                if not col:
+                    return MetadataInfoResult(info=None, message=f"Column '{column}' not found in table '{table}' of database '{db_key}'.")
+                return MetadataInfoResult(info=col, message=f"Description for column '{column}' in table '{table}' of database '{db_key}'.")
+            return MetadataInfoResult(info=tbl, message=f"Description for table '{table}' in database '{db_key}'.")
+        return MetadataInfoResult(info=db, message=f"Description for database '{db_key}'.")
+    return MetadataInfoResult(info=metadata, message="Full metadata returned.")
 
 def format_schema_for_selected_tables(metadata: Dict, db_key: str, selected_table_names: List[str]) -> str:
     """Formats the schema string for a specific list of tables within a database key."""
@@ -566,111 +590,109 @@ def get_table_descriptions_for_db(metadata: Dict, db_key: str) -> str:
 
 # --- Async Functions for Core Logic ---
 
+# --- Refactored: Dynamic, Metadata-Driven Database Classification ---
 async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Optional[str], str, List[str]]:
     """
-    Identifies which database (IFC or MIGA) the user query is most likely referring to.
+    Identifies which database the user query is most likely referring to, using dynamic metadata.
     Returns a tuple (database_key, reasoning, available_keys).
-    'database_key' can be a valid key, None (for critical errors), or "USER_SELECTION_NEEDED".
-    Instantiates its own LLM and Agent.
+    Now uses get_metadata_info tool for all metadata access and validation.
     """
     logger.info(f"Attempting to identify target database for query: {user_query[:50]}...")
-    # Extract database descriptions and keys
-    if 'databases' not in metadata:
+
+    # Use the metadata tool to get the current list of databases
+    class DummyCtx:
+        pass
+    ctx = DummyCtx()
+    meta_result = await get_metadata_info(ctx, MetadataInfoRequest())
+    meta = meta_result.info if hasattr(meta_result, 'info') else metadata
+    if not meta or 'databases' not in meta:
         logger.error("Metadata missing 'databases' key.")
         return None, "Error: 'databases' key missing in metadata configuration.", []
+    dbs = meta['databases']
+    valid_keys = list(dbs.keys())
+    # Optionally support aliases
+    key_alias_map = {k: [k] + dbs[k].get('aliases', []) for k in dbs}
+    all_aliases = {alias.lower(): k for k, aliases in key_alias_map.items() for alias in aliases}
+
+    # Build dynamic descriptions for the prompt
     descriptions = []
-    valid_keys = []
-    for key, db_info in metadata['databases'].items():
+    for key, db_info in dbs.items():
         desc = db_info.get('description', f'Database {key}')
         descriptions.append(f"- {key}: {desc}")
-        valid_keys.append(key)
-    if not descriptions:
-         logger.error("No databases found in metadata to classify against.")
-         return None, "Error: No databases found in metadata to classify against.", []
     descriptions_str = "\n".join(descriptions)
     valid_keys_str = ", ".join([f"'{k}'" for k in valid_keys]) + ", or 'UNKNOWN'"
-    classification_prompt = f"""Given the user query and the descriptions of available databases, identify which database the query is most likely related to.
-
-Available Databases:
-{descriptions_str}
-
-User Query: "{user_query}"
-
-Based *only* on the query and the database descriptions, which database key ({valid_keys_str}) is the most relevant target? If the query is ambiguous, unrelated to these specific databases, or a general greeting/request (like 'hello', 'thank you'), classify it as 'UNKNOWN'.
-"""
-    logger.info("--- Sending classification request to LLM ---")
-    logger.debug(f"Prompt:\\n{classification_prompt}") # DEBUG level if needed
+    classification_prompt = f"""Given the user query and the descriptions of available databases, identify which database the query is most likely related to.\n\nAvailable Databases:\n{descriptions_str}\n\nUser Query: \"{user_query}\"\n\nBased *only* on the query and the database descriptions, which database key ({valid_keys_str}) is the most relevant target? If the query is ambiguous, unrelated to these specific databases, or a general greeting/request (like 'hello', 'thank you'), classify it as 'UNKNOWN'.\n"""
+    logger.info("--- Sending dynamic classification request to LLM ---")
+    logger.debug(f"Prompt:\n{classification_prompt}")
     logger.info("--------------------------------------------")
 
     try:
         # --- Instantiate Model and Agent LOCALLY ---
         global google_api_key
         try:
-            # Ensure configuration happens just before use in this async context
+            import google.generativeai as genai
             genai.configure(api_key=google_api_key)
             logger.info("Configured GenAI SDK within identify_target_database.")
         except Exception as config_err:
-             logger.error(f"Failed to configure GenAI SDK for classification: {config_err}", exc_info=True)
-             # Return None for critical config errors
-             return None, f"Internal Error: Failed to configure AI Service ({config_err}).", []
+            logger.error(f"Failed to configure GenAI SDK for classification: {config_err}", exc_info=True)
+            return None, f"Internal Error: Failed to configure AI Service ({config_err}).", []
 
         gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash")
         local_llm = GeminiModel(model_name=gemini_model_name)
         logger.info(f"Instantiated GeminiModel: {gemini_model_name} for classification.")
 
+        # --- Register get_metadata_info as a tool for the classification agent ---
+        from pydantic_ai import Agent
         classifier_agent = Agent(
             local_llm,
             result_type=DatabaseClassification,
             name="Database Classifier",
             retries=2, # Fewer retries for classification
-            system_prompt="You are an AI assistant that classifies user queries based on provided database descriptions. Output ONLY the structured classification result."
+            system_prompt="You are an AI assistant that classifies user queries based on provided database descriptions. Output ONLY the structured classification result.",
+            tools=[get_metadata_info],
         )
-        logger.info("Classifier agent created locally.")
+        logger.info("Classifier agent created locally with metadata tool.")
         # --- End Instantiation ---
 
         classification_result = None
         try:
             logger.info("Running database classifier agent")
-            
-            # Use run_async_task instead of directly awaiting to handle event loop issues
             async def run_classifier():
                 return await classifier_agent.run(classification_prompt)
-            
             classification_result = run_async_task(run_classifier)
-            
             logger.info("Classification agent run completed.")
         except Exception as e:
             logger.error(f"Classification agent.run() failed: {str(e)}", exc_info=True)
-            # If agent run fails, trigger user selection as we couldn't determine the DB
             return "USER_SELECTION_NEEDED", f"Could not automatically determine the database due to an internal error: {str(e)}. Please select one.", valid_keys
 
-        # Process result
+        # --- Validate LLM Output Against Metadata (case-insensitive, support aliases) ---
         if hasattr(classification_result, 'data') and isinstance(classification_result.output, DatabaseClassification):
             result_data: DatabaseClassification = classification_result.output
             logger.info("--- LLM Classification Result ---")
             logger.info(f"Key: {result_data.database_key}")
             logger.info(f"Reasoning: {result_data.reasoning}")
             logger.info("-------------------------------")
-
-            if result_data.database_key == "UNKNOWN":
+            key_lower = result_data.database_key.lower()
+            if key_lower == "unknown":
                 logger.warning(f"LLM classified as UNKNOWN. Triggering user selection. Reasoning: {result_data.reasoning}")
-                # Ask user to select
                 return "USER_SELECTION_NEEDED", f"Could not automatically determine the target database (Reason: {result_data.reasoning}). Please select one:", valid_keys
-            elif result_data.database_key in valid_keys:
-                # Success
-                return result_data.database_key, result_data.reasoning, valid_keys
+            # Check if the key or any alias matches
+            if key_lower in all_aliases:
+                canonical_key = all_aliases[key_lower]
+                return canonical_key, result_data.reasoning, valid_keys
             else:
-                 logger.warning(f"LLM returned an invalid key: {result_data.database_key}. Triggering user selection.")
-                 # Ask user to select
-                 return "USER_SELECTION_NEEDED", f"AI classification returned an unexpected key '{result_data.database_key}'. Please select the correct database.", valid_keys
+                logger.warning(f"LLM returned an invalid key: {result_data.database_key}. Triggering ModelRetry.")
+                # Use pydantic_ai ModelRetry to trigger retry
+                raise ModelRetry(f"The LLM returned a database key '{result_data.database_key}' that is not present in the current metadata. Please select one of: {', '.join(valid_keys)}.")
         else:
-             logger.error(f"Classification call returned unexpected structure: {classification_result}. Triggering user selection.")
-             # Ask user to select
-             return "USER_SELECTION_NEEDED", "Failed to get a valid classification structure from the AI. Please select the database.", valid_keys
+            logger.error(f"Classification call returned unexpected structure: {classification_result}. Triggering user selection.")
+            return "USER_SELECTION_NEEDED", "Failed to get a valid classification structure from the AI. Please select the database.", valid_keys
 
+    except ModelRetry as retry_exc:
+        logger.warning(f"ModelRetry triggered in classification: {retry_exc}")
+        raise
     except Exception as e:
         logger.exception("Error during database classification LLM call:")
-        # General error during classification, trigger user selection
         return "USER_SELECTION_NEEDED", f"An error occurred during database classification: {str(e)}. Please select one.", valid_keys
 
 
@@ -2579,6 +2601,7 @@ CRITICAL RULES FOR SQL GENERATION:
 6. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
 7. DATA TYPES: Be mindful that many numeric columns might be stored as TEXT (e.g., \"(Million USD)\" columns). You might need to CAST them to a numeric type (e.g., CAST(\"IFC investment for Loan(Million USD)\" AS REAL)) before performing calculations like AVG or SUM. Handle potential non-numeric values gracefully if possible (e.g., WHERE clause to filter them out before casting, or use `IFNULL(CAST(... AS REAL), 0)`).
 8. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
+9. INCLUDE AT LEAST 2 COLUMNS: Include columns that would be needed to make sense of the query. never give only one column in the SELECT query, always include at least 2 columns.
 
 PYTHON AGENT TOOL:
 - You have access to a 'Python agent tool'.
@@ -2614,6 +2637,7 @@ def create_orchestrator_agent_blueprint():
 1. ASSISTANT MODE:
    - If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
    - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IBRD and IDA lending data, IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
+   - If the user asks about the dataset, tables, columns, or wants to know what data is available, you have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use this tool to answer questions about the structure, available columns, or descriptions.
    - If the user asks for clarification about the last response, help them as long as it is related to the World Bank database systems or the outputs of the previous database query.
 
 2. DATABASE QUERY MODE:
@@ -2641,7 +2665,8 @@ def create_orchestrator_agent_blueprint():
    - Use the conversation history to maintain context.
    - If a follow-up question refers to previous results, treat it as a database query, Python data manipulation, or visualization request or clarification about the last response.
 
-Respond ONLY with the structured OrchestratorResult, including the appropriate action type and chart_type if relevant.'''
+Respond ONLY with the structured OrchestratorResult, including the appropriate action type and chart_type if relevant.''',
+        "tools": [get_metadata_info],
     }
 
 # 5. Register python agent as a tool for orchestrator and query agent
