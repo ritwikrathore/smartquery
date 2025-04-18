@@ -19,11 +19,11 @@
                             "type": "TEXT",
                             "description": "World Bank Region to which country / economy and loan belong. Country / Economy lending is grouped into regions based on the current World Bank administrative (rather than geographic) region where project implementation takes place. The Other Region is used for loans to IFC."
                         },
-                        "country_/_economy_code": {
+                        "country_economy_code": {
                             "type": "TEXT",
                             "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "country_/_economy": {
+                        "country_economy": {
                             "type": "TEXT",
                             "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
@@ -31,7 +31,7 @@
                             "type": "TEXT",
                             "description": "The representative of the borrower to which the Bank loan is made."
                         },
-                        "guarantor_country_/_economy_code": {
+                        "guarantor_country_economy_code": {
                             "type": "TEXT",
                             "description": "Country / Economy Code of the Guarantor according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
@@ -53,11 +53,13 @@
                         },
                         "project_id": {
                             "type": "TEXT",
-                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID."
+                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID.",
+                            "query_notes": "Primary column for the table. Include this in your SQL query when querying IBRD loans."
                         },
                         "project_name": {
                             "type": "TEXT",
-                            "description": "Short descriptive project name."
+                            "description": "Short descriptive project name.",
+                            "query_notes": "Include this in your SQL query when querying IBRD loans."
                         },
                         "original_principal_amount_usd": {
                             "type": "REAL",
@@ -152,11 +154,11 @@
                             "type": "TEXT",
                             "description": "Country / Economy lending is grouped into regions based on the current World Bank administrative (rather than geographic) region where project implementation takes place. The Other Region is used for loans to the IFC."
                         },
-                        "country_/_economy_code": {
+                        "country_economy_code": {
                             "type": "TEXT",
                             "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
                         },
-                        "country_/_economy": {
+                        "country_economy": {
                             "type": "TEXT",
                             "description": "Country / Economy to which loan has been issued. Loans to the IFC are included under the country / economy “World”."
                         },
@@ -178,11 +180,13 @@
                         },
                         "project_id": {
                             "type": "TEXT",
-                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID."
+                            "description": "A Bank project is referenced by a project ID (Pxxxxxxx). More than one loan, credit, or grant may be associated with one Project ID.",
+                            "query_notes": "Primary column for the table. Include this in your SQL query when querying IDA loans."
                         },
                         "project_name": {
                             "type": "TEXT",
-                            "description": "Short descriptive project name."
+                            "description": "Short descriptive project name.",
+                            "query_notes": "Include this in your SQL query when querying IDA loans."
                         },
                         "original_principal_amount_usd": {
                             "type": "REAL",

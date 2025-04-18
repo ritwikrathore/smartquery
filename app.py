@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import sqlite3
-from typing import Dict, List, Union, Optional, Literal, Any, AsyncGenerator, Tuple
+from typing import Dict, List, Union, Optional, Any, AsyncGenerator, Tuple, Literal
 import asyncio
 import logging
 from pydantic import BaseModel, Field
@@ -22,6 +22,7 @@ import plotly.express as px
 import nest_asyncio
 import streamlit.components.v1 as components # Import components for JS scroll
 import re
+import functools
 
 # LangChain conversational memory
 from langchain.memory import ConversationBufferMemory
@@ -35,9 +36,14 @@ nest_asyncio.apply()
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("nest_asyncio applied globally at startup.")
-# logger.setLevel(logging.DEBUG) # Uncomment for very detailed debugging
 
 
+async def log_agent_run(agent, prompt, *args, **kwargs):
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[AGENT RUN] {getattr(agent, 'name', str(agent))} running with prompt:\n{prompt}")
+    result = await agent.run(prompt, *args, **kwargs)
+    logger.debug(f"[AGENT RESULT] {getattr(agent, 'name', str(agent))} result: {result}")
+    return result
 # --- Google Generative AI Import and Configuration ---
 try:
     import google.generativeai as genai
@@ -147,8 +153,11 @@ class QueryResponse(BaseModel):
     python_result: Optional[PythonCodeResult] = Field(None, description="Python code details if Python was generated for visualization/analysis")
 
 class DatabaseClassification(BaseModel):
-    """Identifies the target database for a user query."""
-    database_key: Literal["IFC", "MIGA", "IBRD", "UNKNOWN"] = Field(..., description="The database key ('IFC', 'MIGA', 'IBRD') the user query most likely refers to, based on keywords and the database descriptions provided. Use 'UNKNOWN' if the query is ambiguous.")
+    """
+    Identifies the target database for a user query.
+    The database_key is now a dynamic string, validated at runtime against metadata.
+    """
+    database_key: str = Field(..., description="The database key the user query most likely refers to, based on keywords and the database descriptions provided. Use 'UNKNOWN' if the query is ambiguous.")
     reasoning: str = Field(..., description="Brief explanation for the classification (e.g., 'Query mentions IFC investments', 'Query mentions MIGA guarantees', 'Query mentions IBRD and IDA lending', 'Query is ambiguous/general').")
 
 # --- Orchestrator Model and Blueprint ---
@@ -427,10 +436,8 @@ def create_table_selection_agent_blueprint():
         "result_type": SuggestedTables,
         "name": "Table Selection Agent",
         "retries": 2,
-        "system_prompt": """You are an expert database assistant. Your task is to analyze a user's query and a list of available tables (with descriptions) in a specific database.
-Identify the **minimum set of table names** from the provided list that are absolutely required to answer the user's query.
-Consider the table names and their descriptions carefully.
-Output ONLY the list of relevant table names and a brief reasoning."""
+        "system_prompt": """You are an expert database assistant. Your task is to analyze a user's query and a list of available tables (with descriptions) in a specific database.\nIdentify the **minimum set of table names** from the provided list that are absolutely required to answer the user's query.\nConsider the table names and their descriptions carefully.\n\nYou have access to a tool called 'get_metadata_info' which can retrieve the list of columns and their descriptions for any table in the database. Use this tool to look up the columns and their descriptions for each table if needed, and use this information to make a more informed decision about which tables are relevant to the user query.\n\nOutput ONLY the list of relevant table names and a brief reasoning.""",
+        "tools": [get_metadata_info],
     }
 
 def create_query_agent_blueprint():
@@ -453,7 +460,7 @@ def create_column_prune_agent_blueprint():
         "result_type": PrunedSchemaResult,
         "name": "Column Pruning Agent",
         "retries": 2,
-        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message. Use this schema information to understand the database structure and generate an accurate pruned schema string. DO NOT respond that you need to know the table structure - it is already provided in the message.\n\nYou have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use it if you need to clarify what a table or column means.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Focus on identifying relevant columns):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Understand the Include columns that would be needed to make sense of the query.\n\nYOUR GOAL is to output a concise schema string containing ONLY the necessary tables and columns.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the `pruned_schema_string` containing only the required columns.\n4. Provide a brief `explanation` of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nDo NOT generate SQL queries for the user's request. Do NOT generate Python code.\nYour only task is SCHEMA PRUNING.\n""",
+        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Focus on identifying relevant columns):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project_name, project_id.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns, but for each column, include all metadata fields.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nDo NOT generate SQL queries for the user's request. Do NOT generate Python code.\nYour only task is SCHEMA PRUNING.\n""",
         "tools": [get_metadata_info],
     }
 
@@ -592,14 +599,7 @@ def get_table_descriptions_for_db(metadata: Dict, db_key: str) -> str:
 
 # --- Refactored: Dynamic, Metadata-Driven Database Classification ---
 async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Optional[str], str, List[str]]:
-    """
-    Identifies which database the user query is most likely referring to, using dynamic metadata.
-    Returns a tuple (database_key, reasoning, available_keys).
-    Now uses get_metadata_info tool for all metadata access and validation.
-    """
     logger.info(f"Attempting to identify target database for query: {user_query[:50]}...")
-
-    # Use the metadata tool to get the current list of databases
     class DummyCtx:
         pass
     ctx = DummyCtx()
@@ -610,24 +610,49 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
         return None, "Error: 'databases' key missing in metadata configuration.", []
     dbs = meta['databases']
     valid_keys = list(dbs.keys())
-    # Optionally support aliases
-    key_alias_map = {k: [k] + dbs[k].get('aliases', []) for k in dbs}
-    all_aliases = {alias.lower(): k for k, aliases in key_alias_map.items() for alias in aliases}
-
-    # Build dynamic descriptions for the prompt
+    # Build mapping from database_name (case-insensitive) to key
+    name_to_key = {}
+    db_names = []
+    for k, v in dbs.items():
+        db_name = v.get('database_name', k)
+        name_to_key[db_name.lower()] = k
+        db_names.append(db_name)
+    # Add 'UNKNOWN' as a valid option
+    db_names.append('UNKNOWN')
     descriptions = []
     for key, db_info in dbs.items():
         desc = db_info.get('description', f'Database {key}')
-        descriptions.append(f"- {key}: {desc}")
+        table_lines = []
+        for tname, tinfo in db_info.get('tables', {}).items():
+            tdesc = tinfo.get('description', '')
+            col_lines = []
+            for cname, cinfo in tinfo.get('columns', {}).items():
+                cdesc = cinfo.get('description', '')
+                col_lines.append(f"      - {cname}: {cdesc}")
+            if col_lines:
+                table_lines.append(f"    * {tname}: {tdesc}\n" + "\n".join(col_lines))
+            else:
+                table_lines.append(f"    * {tname}: {tdesc}")
+        db_block = f"- {db_info.get('database_name', key)}: {desc}\n" + ("\n".join(table_lines) if table_lines else "")
+        descriptions.append(db_block)
     descriptions_str = "\n".join(descriptions)
-    valid_keys_str = ", ".join([f"'{k}'" for k in valid_keys]) + ", or 'UNKNOWN'"
-    classification_prompt = f"""Given the user query and the descriptions of available databases, identify which database the query is most likely related to.\n\nAvailable Databases:\n{descriptions_str}\n\nUser Query: \"{user_query}\"\n\nBased *only* on the query and the database descriptions, which database key ({valid_keys_str}) is the most relevant target? If the query is ambiguous, unrelated to these specific databases, or a general greeting/request (like 'hello', 'thank you'), classify it as 'UNKNOWN'.\n"""
-    logger.info("--- Sending dynamic classification request to LLM ---")
+    db_names_str = ", ".join([f"'{n}'" for n in db_names])
+    # --- NEW: Name-based system prompt ---
+    classifier_system_prompt = (
+        "You are an AI assistant that classifies user queries by deeply analyzing the provided database metadata. "
+        "You have access to detailed descriptions of each database, their tables, and columns. "
+        "Your job is to match the user's query to the most relevant database by considering all available metadata, "
+        "even if the query is general or does not contain explicit keywords. "
+        "Use the database, table, and column descriptions to infer the best match. "
+        "Respond ONLY with the database name (from the metadata, field 'database_name') in a structured object: {\"database_name\": ..., \"reasoning\": ...}. "
+        "Only respond with 'UNKNOWN' if, after considering all metadata, you are truly unable to determine a relevant database. "
+        "Output ONLY the structured classification result."
+    )
+    classification_prompt = f"""DATABASE METADATA (JSON):\n{json.dumps(meta, indent=2)}\n\nUSER QUERY: \"{user_query}\"\n\nBased on the above metadata, which database name ({db_names_str}) is the most relevant target? If the query is ambiguous, unrelated to these databases, or you cannot make a confident choice after considering all metadata, respond with 'UNKNOWN'.\nRespond ONLY with a JSON object: {{\"database_name\": ..., \"reasoning\": ...}}\n"""
+    logger.info("--- Sending name-based classification request to LLM ---")
     logger.debug(f"Prompt:\n{classification_prompt}")
     logger.info("--------------------------------------------")
-
     try:
-        # --- Instantiate Model and Agent LOCALLY ---
         global google_api_key
         try:
             import google.generativeai as genai
@@ -636,58 +661,41 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
         except Exception as config_err:
             logger.error(f"Failed to configure GenAI SDK for classification: {config_err}", exc_info=True)
             return None, f"Internal Error: Failed to configure AI Service ({config_err}).", []
-
         gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash")
         local_llm = GeminiModel(model_name=gemini_model_name)
-        logger.info(f"Instantiated GeminiModel: {gemini_model_name} for classification.")
-
-        # --- Register get_metadata_info as a tool for the classification agent ---
         from pydantic_ai import Agent
+        # Define a new result model for name-based output
+        class NameBasedClassification(BaseModel):
+            database_name: str
+            reasoning: str
         classifier_agent = Agent(
             local_llm,
-            result_type=DatabaseClassification,
+            result_type=NameBasedClassification,
             name="Database Classifier",
-            retries=2, # Fewer retries for classification
-            system_prompt="You are an AI assistant that classifies user queries based on provided database descriptions. Output ONLY the structured classification result.",
+            retries=2,
+            system_prompt=classifier_system_prompt,
             tools=[get_metadata_info],
         )
         logger.info("Classifier agent created locally with metadata tool.")
-        # --- End Instantiation ---
-
-        classification_result = None
-        try:
-            logger.info("Running database classifier agent")
-            async def run_classifier():
-                return await classifier_agent.run(classification_prompt)
-            classification_result = run_async_task(run_classifier)
-            logger.info("Classification agent run completed.")
-        except Exception as e:
-            logger.error(f"Classification agent.run() failed: {str(e)}", exc_info=True)
-            return "USER_SELECTION_NEEDED", f"Could not automatically determine the database due to an internal error: {str(e)}. Please select one.", valid_keys
-
-        # --- Validate LLM Output Against Metadata (case-insensitive, support aliases) ---
-        if hasattr(classification_result, 'data') and isinstance(classification_result.output, DatabaseClassification):
-            result_data: DatabaseClassification = classification_result.output
-            logger.info("--- LLM Classification Result ---")
-            logger.info(f"Key: {result_data.database_key}")
-            logger.info(f"Reasoning: {result_data.reasoning}")
-            logger.info("-------------------------------")
-            key_lower = result_data.database_key.lower()
-            if key_lower == "unknown":
-                logger.warning(f"LLM classified as UNKNOWN. Triggering user selection. Reasoning: {result_data.reasoning}")
-                return "USER_SELECTION_NEEDED", f"Could not automatically determine the target database (Reason: {result_data.reasoning}). Please select one:", valid_keys
-            # Check if the key or any alias matches
-            if key_lower in all_aliases:
-                canonical_key = all_aliases[key_lower]
-                return canonical_key, result_data.reasoning, valid_keys
+        classification_result = run_async_task(lambda: log_agent_run(classifier_agent, classification_prompt))
+        if hasattr(classification_result, 'output') and hasattr(classification_result.output, 'database_name'):
+            db_name = classification_result.output.database_name.strip()
+            reasoning = classification_result.output.reasoning
+            logger.info(f"--- LLM Classification Result ---\nDatabase Name: {db_name}\nReasoning: {reasoning}\n-------------------------------")
+            db_name_lower = db_name.lower()
+            if db_name_lower == "unknown":
+                logger.warning(f"LLM classified as UNKNOWN. Triggering user selection. Reasoning: {reasoning}")
+                return "USER_SELECTION_NEEDED", f"Could not automatically determine the target database (Reason: {reasoning}). Please select one:", valid_keys
+            if db_name_lower in name_to_key:
+                canonical_key = name_to_key[db_name_lower]
+                return canonical_key, reasoning, valid_keys
             else:
-                logger.warning(f"LLM returned an invalid key: {result_data.database_key}. Triggering ModelRetry.")
-                # Use pydantic_ai ModelRetry to trigger retry
-                raise ModelRetry(f"The LLM returned a database key '{result_data.database_key}' that is not present in the current metadata. Please select one of: {', '.join(valid_keys)}.")
+                logger.warning(f"LLM returned a database name '{db_name}' that is not present in the current metadata. Triggering ModelRetry.")
+                from pydantic_ai import ModelRetry
+                raise ModelRetry(f"The LLM returned a database name '{db_name}' that is not present in the current metadata. Please select one of: {db_names_str}.") # Use db_names_str here
         else:
             logger.error(f"Classification call returned unexpected structure: {classification_result}. Triggering user selection.")
             return "USER_SELECTION_NEEDED", "Failed to get a valid classification structure from the AI. Please select the database.", valid_keys
-
     except ModelRetry as retry_exc:
         logger.warning(f"ModelRetry triggered in classification: {retry_exc}")
         raise
@@ -788,7 +796,7 @@ User: {message}"""
         
         orchestrator_result = run_async_task(run_orchestrator)
         
-        if hasattr(orchestrator_result, 'data'):
+        if hasattr(orchestrator_result, 'output'):
             # --- Modern LLM Orchestration: Combined SQL + Visualization Intent ---
             # Detect if the user query requests both data and visualization in one step
             if orchestrator_result.output.action == "visualization":
@@ -879,6 +887,8 @@ User: {message}"""
             target_db_key = identified_key
             logger.info(f"Step 2: Target database confirmed as: {target_db_key}")
             st.session_state.last_db_key = target_db_key
+            # Store the database selection reasoning for later display
+            st.session_state.db_selection_reasoning = reasoning
             logger.info(f"Step 3: Proceeding to table selection stage for DB: {target_db_key}")
             # Await the table selection stage directly
             await run_table_selection_stage(message, target_db_key, db_metadata)
@@ -970,7 +980,7 @@ Based *only* on the user query and the table descriptions, which of the listed t
             
             logger.info("Table selection agent run completed.")
 
-            if table_agent_result and hasattr(table_agent_result, 'data') and isinstance(table_agent_result.output, SuggestedTables):
+            if table_agent_result and hasattr(table_agent_result, 'output') and isinstance(table_agent_result.output, SuggestedTables):
                 selected_tables = table_agent_result.output.table_names
                 table_agent_reasoning = table_agent_result.output.reasoning
                 logger.info(f"Table Agent suggested tables: {selected_tables}. Reasoning: {table_agent_reasoning}")
@@ -1048,7 +1058,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         
         viz_result = run_async_task(run_python_agent)
         
-        if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
+        if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
             vis = viz_result.output.visualization
             if vis.success:
                 response = f"Here's the {chart_type} chart of your data:"
@@ -1068,7 +1078,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
                 })
         else:
             content = "I've created a chart based on your data."
-            if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'explanation'):
+            if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'explanation'):
                 content = viz_result.output.explanation or content
             
             st.session_state.chat_history.append({
@@ -1150,7 +1160,7 @@ Based *only* on the user query and the full schema provided, prune the schema st
             
             pruning_agent_result = run_async_task(run_prune_agent)
 
-            if hasattr(pruning_agent_result, 'data') and isinstance(pruning_agent_result.output, PrunedSchemaResult):
+            if hasattr(pruning_agent_result, 'output') and isinstance(pruning_agent_result.output, PrunedSchemaResult):
                 pruned_schema_string = pruning_agent_result.output.pruned_schema_string
                 pruning_explanation = pruning_agent_result.output.explanation
                 logger.info(f"Column Pruning Agent successful. Explanation: {pruning_explanation}")
@@ -1279,7 +1289,7 @@ User Request: {user_message}'''
             logger.warning("Agent result object does not have 'new_messages' attribute.")
 
         logger.info("Processing Query Agent response (after confirmation)...")
-        if hasattr(agent_run_result, 'data') and isinstance(agent_run_result.output, QueryResponse):
+        if hasattr(agent_run_result, 'output') and isinstance(agent_run_result.output, QueryResponse):
             response: QueryResponse = agent_run_result.output
             logger.info("Agent response has expected QueryResponse structure.")
             logger.debug(f"AI Response Data: {response}") # Debug log
@@ -1520,7 +1530,7 @@ User Request: {user_message}'''
                     return await call_python_agent(ctx, visualization_prompt)
                 viz_result = run_async_task(run_python_agent)
                 # Add the chart to the chat history
-                if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
+                if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
                     vis = viz_result.output.visualization
                     if vis.success:
                         response = f"Here's the {chart_type} chart of your data:"
@@ -1540,7 +1550,7 @@ User Request: {user_message}'''
                         })
                 else:
                     content = "I've created a chart based on your data."
-                    if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'explanation'):
+                    if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'explanation'):
                         content = viz_result.output.explanation or content
                     st.session_state.chat_history.append({
                         "role": "assistant",
@@ -1666,7 +1676,7 @@ async def continue_after_table_confirmation():
                     return await call_python_agent(ctx, visualization_prompt)
                 viz_result = run_async_task(run_python_agent)
                 # Add the chart to the chat history
-                if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
+                if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'visualization') and viz_result.output.visualization:
                     vis = viz_result.output.visualization
                     if vis.success:
                         response = f"Here's the {chart_type} chart of your data:"
@@ -1686,7 +1696,7 @@ async def continue_after_table_confirmation():
                         })
                 else:
                     content = "I've created a chart based on your data."
-                    if hasattr(viz_result, 'data') and hasattr(viz_result.output, 'explanation'):
+                    if hasattr(viz_result, 'output') and hasattr(viz_result.output, 'explanation'):
                         content = viz_result.output.explanation or content
                     st.session_state.chat_history.append({
                         "role": "assistant",
@@ -1730,6 +1740,7 @@ def clear_pending_state():
         "candidate_tables", "all_tables", "table_agent_reasoning",
         # New DB selection keys
         "db_selection_pending", "db_selection_reason", "pending_db_keys", "confirmed_db_key"
+        # Note: We're deliberately NOT clearing db_selection_reasoning here
     ]
     cleared_count = 0
     for key in keys_to_clear:
@@ -1792,7 +1803,7 @@ def run_async(coro):
     leveraging the robust run_async_task implementation.
     """
     coro_name = getattr(coro, '__name__', str(coro))
-    logger.debug(f"Running coroutine '{coro_name}' using run_async_task...")
+    #logger.debug(f"Running coroutine '{coro_name}' using run_async_task...")
     
     # Use the more robust implementation that handles event loop errors
     try:
@@ -2029,18 +2040,18 @@ def main():
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.info('Query data from the World Bank Group datasets available at https://financesone.worldbank.org/. The AI will identify the appropriate database automatically.', icon="ℹ️") # Use streamlit icon
+    st.info('Query data from the World Bank Group datasets available at https://financesone.worldbank.org/.', icon="ℹ️") # Use streamlit icon
     # --- Example Queries ---
     st.markdown("""
     <div class="example-queries">
         <p>Example Questions:</p>
         <ul>
-            <li>"Show me the status of all Loans Disbursed to Ukraine."</li>
+            <li>"Get me the top 10 countries with the highest number of advisory projects approved in 2024"</li>
             <li>"Show me the sum of IBRD loans to India approved since 2020 per year"</li>
             <li>"Compare the average IFC investment size for 'Loan' products between Nepal and Bhutan."</li>
             <li>"What is the total gross guarantee exposure for MIGA in the Tourism sector in Senegal?"</li>
-            <li>"Which countries have the highest total MIGA guarantee exposure? Create a bar chart."</li>
             <li>"Give me the top 10 IFC equity investments from China"</li>
+            <li>"Get me the status of all Projects in Ukraine."</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -2326,6 +2337,8 @@ def main():
                             # Set the confirmed key, clear the pending flag
                             st.session_state.confirmed_db_key = chosen_db
                             st.session_state.db_selection_pending = False
+                            # Set a manual selection reasoning message
+                            st.session_state.db_selection_reasoning = "This database was manually selected by you."
                             # Keep other pending state (message, metadata) for the next step
                             # Rerun immediately to trigger the continuation logic above
                             st.rerun()
@@ -2364,8 +2377,47 @@ def main():
             all_tables = st.session_state.get("all_tables", [])
             reasoning = st.session_state.get("table_agent_reasoning", "")
             db_key = st.session_state.get("pending_target_db_key", "") # Get the key determined earlier
+            db_selection_reasoning = st.session_state.get("db_selection_reasoning", "")
 
             with st.chat_message("assistant"):
+                # Show which database was auto-selected
+                db_display_name = db_key
+                if "pending_db_metadata" in st.session_state:
+                    db_metadata = st.session_state.get("pending_db_metadata")
+                    db_entry = db_metadata.get('databases', {}).get(db_key, {})
+                    if db_entry and 'database_name' in db_entry:
+                        db_display_name = f"{db_entry['database_name']} ({db_key})"
+                
+                st.info(f"**Selected Database:** {db_display_name}", icon="🔍")
+                
+                # Show the AI's reasoning for selecting this database
+                if db_selection_reasoning:
+                    st.caption(f"**Why this database?** {db_selection_reasoning}")
+                
+                # Add a button to change the database selection
+                if st.button("Change Database", key="change_db_button"):
+                    logger.info(f"User requested to change database from: {db_key}")
+                    # Set the state for database selection UI
+                    st.session_state.db_selection_pending = True
+                    # Load the database metadata if available
+                    if "pending_db_metadata" in st.session_state:
+                        db_metadata = st.session_state.get("pending_db_metadata")
+                        st.session_state.pending_db_keys = list(db_metadata.get('databases', {}).keys())
+                    else:
+                        # Fallback in case metadata is missing
+                        logger.warning("Missing db_metadata when trying to change database")
+                        db_metadata = load_db_metadata()
+                        if db_metadata:
+                            st.session_state.pending_db_metadata = db_metadata
+                            st.session_state.pending_db_keys = list(db_metadata.get('databases', {}).keys())
+                        
+                    # Keep the user message (already stored in pending_user_message)
+                    st.session_state.db_selection_reason = "Please select a different database for your query."
+                    # Clear table confirmation to avoid conflicting states
+                    st.session_state.table_confirmation_pending = False
+                    # Rerun immediately to show the database selection UI
+                    st.rerun()
+                
                 # Adjust message based on whether candidates exist
                 if not candidate_tables and not reasoning:
                      st.info(f"**Table Selection Required:** Please select the necessary tables from the {db_key} database for your query.", icon="ℹ️")
@@ -2601,7 +2653,7 @@ CRITICAL RULES FOR SQL GENERATION:
 6. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
 7. DATA TYPES: Be mindful that many numeric columns might be stored as TEXT (e.g., \"(Million USD)\" columns). You might need to CAST them to a numeric type (e.g., CAST(\"IFC investment for Loan(Million USD)\" AS REAL)) before performing calculations like AVG or SUM. Handle potential non-numeric values gracefully if possible (e.g., WHERE clause to filter them out before casting, or use `IFNULL(CAST(... AS REAL), 0)`).
 8. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
-9. INCLUDE AT LEAST 2 COLUMNS: Include columns that would be needed to make sense of the query. never give only one column in the SELECT query, always include at least 2 columns.
+9. INCLUDE AT LEAST 3 COLUMNS: Include columns that would be needed to make sense of the query like project name and number. never give only one column in the SELECT query, always include at least 3 columns.
 
 PYTHON AGENT TOOL:
 - You have access to a 'Python agent tool'.

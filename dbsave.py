@@ -203,6 +203,53 @@ conn.close()
 
 
 
+# connect to ibrd.db and get all tables
+conn = sqlite3.connect('assets/dbs/ibrd.db')
+tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+print(tables.fetchall())
+
+# get columns for each ibrd_lending table
+ibrd_lending_columns = conn.execute("PRAGMA table_info(ibrd_lending)").fetchall()
+print(ibrd_lending_columns)
+
+#change 'guarantor_country_/_economy_code' to 'guarantor_country_economy_code'
+# ALTER TABLE ibrd_lending RENAME COLUMN "guarantor_country_/_economy_code" TO "guarantor_country_economy_code";
+conn.execute("ALTER TABLE ibrd_lending RENAME COLUMN 'guarantor_country_/_economy_code' TO 'guarantor_country_economy_code'")
+
+#change 4, 'country_/_economy' to 'country_economy'
+# ALTER TABLE ibrd_lending RENAME COLUMN "country_/_economy" TO "country_economy";
+conn.execute("ALTER TABLE ibrd_lending RENAME COLUMN 'country_/_economy' TO 'country_economy'")
+
+#change 3, 'country_/_economy_code' to 'country_economy_code'
+# ALTER TABLE ibrd_lending RENAME COLUMN "country_/_economy_code" TO "country_economy_code";
+conn.execute("ALTER TABLE ibrd_lending RENAME COLUMN 'country_/_economy_code' TO 'country_economy_code'")
+
+
+
+#commit changes
+conn.commit()
+
+
+# get columns for each ida_lending table
+ida_lending_columns = conn.execute("PRAGMA table_info(ida_lending)").fetchall()
+print(ida_lending_columns)
+
+#change 4, 'country_/_economy' to 'country_economy'
+# ALTER TABLE ibrd_lending RENAME COLUMN "country_/_economy" TO "country_economy";
+conn.execute("ALTER TABLE ida_lending RENAME COLUMN 'country_/_economy' TO 'country_economy'")
+
+#change 3, 'country_/_economy_code' to 'country_economy_code'
+# ALTER TABLE ibrd_lending RENAME COLUMN "country_/_economy_code" TO "country_economy_code";
+conn.execute("ALTER TABLE ida_lending RENAME COLUMN 'country_/_economy_code' TO 'country_economy_code'")
+
+
+
+
+
+
+
+conn.close()
+
 
 
 
