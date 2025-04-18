@@ -1,8 +1,8 @@
 {
     "description": "Metadata for multiple World Bank Group databases.",
     "databases": {
-        "ibrd": {
-            "database_path": "assets/dbs/ibrd.db",
+        "ibrd_ida": {
+            "database_path": "assets/dbs/ibrd_ida.db",
             "tables": {
                 "ibrd_lending": {
                     "description": "Details for ibrd_lending. Latest available data on Loans and Guarantees provided since inception. Note: IDs starting with IBRDB and IBRDG are 'Guarantees' and the rest are 'Loans'. The International Bank for Reconstruction and Development (IBRD) loans are public and publicly guaranteed debt extended by the World Bank Group. IBRD loans are made to, or guaranteed by, countries / economies that are members of IBRD. IBRD may also make loans to IFC. IBRD lends at market rates. Data are in U.S. dollars calculated using historical rates. This dataset contains the latest available snapshot of the Statement of Loans. The World Bank complies with all sanctions applicable to World Bank transactions.",
@@ -63,7 +63,8 @@
                         },
                         "original_principal_amount_usd": {
                             "type": "REAL",
-                            "description": "The original US dollar amount of the loan that is committed and approved."
+                            "description": "The original US dollar amount of the loan that is committed and approved.",
+                            "query_notes": "Use this as your primary amount column for SQL query when querying IBRD loans, unless the user asks for a different amount column. Include this column in your SQL query when querying IBRD loans, unless you are including some other amount column as per the user query."
                         },
                         "cancelled_amount_usd": {
                             "type": "REAL",
@@ -190,7 +191,8 @@
                         },
                         "original_principal_amount_usd": {
                             "type": "REAL",
-                            "description": "The original US dollar amount of the loan that is committed and approved."
+                            "description": "The original US dollar amount of the loan that is committed and approved.",
+                            "query_notes": "Use this as your primary amount column for SQL query when querying IDA loans, unless the user asks for a different amount column. Include this column in your SQL query when querying IDA loans, unless you are including some other amount column as per the user query."
                         },
                         "cancelled_amount_usd": {
                             "type": "REAL",
@@ -342,25 +344,26 @@
                             "type": "TIMESTAMP",
                             "description": "Date when the project was invested by IFC."
                         },
-                        "ifc_investment_for_risk_managementmillion_-_usd": {
+                        "ifc_investment_for_risk_management_million_usd": {
                             "type": "REAL",
                             "description": "Risk Management - product designed to hedge the financial risk of IFC client(s) using derivative products."
                         },
-                        "ifc_investment_for_guaranteemillion_-_usd": {
+                        "ifc_investment_for_guarantee_million_usd": {
                             "type": "REAL",
                             "description": "Guarantee - promise from one entity to assume responsibility for the payment of a financial obligation of another entity if such other entity fails to perform. A guarantee is a contingent liability of the guarantor."
                         },
-                        "ifc_investment_for_loanmillion_-_usd": {
+                        "ifc_investment_for_loan_million_usd": {
                             "type": "REAL",
                             "description": "Loans - money advances to a client, to be repaid at a later date, usually with interest and/or fees."
                         },
-                        "ifc_investment_for_equitymillion_-_usd": {
+                        "ifc_investment_for_equity_million_usd": {
                             "type": "REAL",
                             "description": "Equity - Ownership interest in a corporation or enterprise that represents a claim on the assets of the entity in proportion to the number and class of shares owned."
                         },
-                        "total_ifc_investment_as_approved_by_boardmillion_-_usd": {
+                        "total_ifc_investment_as_approved_by_board_million_usd": {
                             "type": "REAL",
-                            "description": "Sum of project's financial product(s) prior to approval and approved."
+                            "description": "Sum of project's financial product(s) prior to approval and approved.",
+                            "query_notes": "Use this as your primary amount column for SQL query when querying IFC investments, unless the user asks for a different amount column. Include this column in your SQL query when querying IFC investments, unless you are including some other amount column as per the user query."
                         },
                         "wb_country_code": {
                             "type": "TEXT",
@@ -407,9 +410,10 @@
                             "type": "TEXT",
                             "description": "product / business line"
                         },
-                        "estimated_total_budget_$": {
+                        "estimated_total_budget_usd": {
                             "type": "REAL",
-                            "description": "Project budget includes all project-funded activities."
+                            "description": "Project budget includes all project-funded activities.",
+                            "query_notes": "Use this as your primary amount column for SQL query when querying IFC advisory, unless the user asks for a different amount column. Include this column in your SQL query when querying IFC advisory, unless you are including some other amount column as per the user query."
                         },
                         "department": {
                             "type": "REAL",
@@ -483,7 +487,8 @@
                         },
                         "gross_issued_amount_usd": {
                             "type": "REAL",
-                            "description": "Gross issued amount in USD."
+                            "description": "Gross issued amount in USD.",
+                            "query_notes": "Use this as your primary amount column for SQL query when querying MIGA guarantees, unless the user asks for a different amount column. Include this column in your SQL query when querying MIGA guarantees, unless you are including some other amount column as per the user query."
                         },
                         "project_start_date": {
                             "type": "TIMESTAMP",

@@ -244,19 +244,40 @@ conn.execute("ALTER TABLE ida_lending RENAME COLUMN 'country_/_economy_code' TO 
 
 
 
-
-
-
-
 conn.close()
 
 
 
+#connect to ifc.db and get all tables
+conn = sqlite3.connect('assets/dbs/ifc.db')
+tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+print(tables.fetchall())
+
+
+# ifc_investments
+ifc_investments_columns = conn.execute("PRAGMA table_info(ifc_investments)").fetchall()
+print(ifc_investments_columns)
 
 
 
+# change 19, 'ifc_investment_for_loanmillion_-_usd' to 'ifc_investment_for_loan_million_usd'
+conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_loanmillion_-_usd' TO 'ifc_investment_for_loan_million_usd'")
 
+#17, 'ifc_investment_for_risk_managementmillion_-_usd'
+conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_risk_managementmillion_-_usd' TO 'ifc_investment_for_risk_management_million_usd'")
 
+#18, 'ifc_investment_for_guaranteemillion_-_usd'
+conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_guaranteemillion_-_usd' TO 'ifc_investment_for_guarantee_million_usd'")
+
+#20, 'ifc_investment_for_equitymillion_-_usd'
+conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_equitymillion_-_usd' TO 'ifc_investment_for_equity_million_usd'")
+
+# ifc_advisory
+ifc_advisory_columns = conn.execute("PRAGMA table_info(ifc_advisory)").fetchall()
+print(ifc_advisory_columns)
+
+# estimated_total_budget_$
+conn.execute("ALTER TABLE ifc_advisory RENAME COLUMN 'estimated_total_budget_$' TO 'estimated_total_budget_usd'")
 
 
 

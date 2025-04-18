@@ -221,18 +221,18 @@ The target database (SQLite) details are provided in each request.
 
 IMPORTANT OUTPUT STRUCTURE:
 You MUST return your response as a valid QueryResponse object with these fields:
-1. text_message: A human-readable response explaining your findings and analysis.
+1. text_message: A human-readable response explaining your choice of columns and aggregations.
 2. sql_result: For any data retrieval query, you MUST include this field with the SQL query string.
 3. python_result: OPTIONAL. This field is ONLY populated by the output of the Python agent tool IF it was called.
 
 CRITICAL RULES FOR SQL GENERATION:
 1. For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQLite query.
 2. ALWAYS GENERATE SQL: If the user is asking about specific data, records, amounts, or numbers, you MUST generate SQL - even if you're unsure about exact column names. Missing SQL is a critical error.
-3. PAY ATTENTION TO COLUMN NAMES: If a column name in the provided schema contains spaces or special characters, you MUST enclose it in double quotes (e.g., SELECT \"Total IFC Investment Amount\" FROM ...). Failure to quote such names will cause errors. Check for columns like \"IFC investment for Risk Management(Million USD)\", \"IFC investment for Guarantee(Million USD)\", etc.
-4. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
-5. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
-6. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
-7. DATA TYPES: Be mindful that many numeric columns might be stored as TEXT (e.g., \"(Million USD)\" columns). You might need to CAST them to a numeric type (e.g., CAST(\"IFC investment for Loan(Million USD)\" AS REAL)) before performing calculations like AVG or SUM. Handle potential non-numeric values gracefully if possible (e.g., WHERE clause to filter them out before casting, or use `IFNULL(CAST(... AS REAL), 0)`).
+3. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
+4. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
+5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column name.
+6. DATA TYPES: You will be provided with a schema that includes the data types of the columns. Use this information to generate accurate SQL queries.
+7. Always add relevant columns like project name, project id, and amount in your SELECT statement. and the most relevant details from the user query. like if they ask for data from a country, include the country column in your SELECT statement.
 8. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
 
 PYTHON AGENT TOOL:
@@ -460,7 +460,7 @@ def create_column_prune_agent_blueprint():
         "result_type": PrunedSchemaResult,
         "name": "Column Pruning Agent",
         "retries": 2,
-        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Focus on identifying relevant columns):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project_name, project_id.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns, but for each column, include all metadata fields.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nDo NOT generate SQL queries for the user's request. Do NOT generate Python code.\nYour only task is SCHEMA PRUNING.\n""",
+        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Identify the intent of the user query and focus on identifying relevant columns needed for SQL query):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned for SELECT statement, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project name, project id and amount.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns needed to generate the correct SQL query.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nYour only task is SCHEMA PRUNING.\n""",
         "tools": [get_metadata_info],
     }
 
@@ -2032,26 +2032,26 @@ def main():
     <div class="features-container">
         <div class="features-row">
             <div class="feature-text">{check_img} Ask natural language questions about World Bank Group data.</div>
-            <div class="feature-text">{check_img} Get instant SQL-powered insights from both databases.</div>
+            <div class="feature-text">{check_img} Get instant SQL-powered insights from World Bank Group databases.</div>
         </div>
         <div class="features-row">
             <div class="feature-text">{check_img} Generate visualizations (bar, line, pie charts) via Python.</div>
-            <div class="feature-text">{check_img} System automatically identifies the right database for your query.</div>
+            <div class="feature-text">{check_img} SmartQuery automatically identifies the right database for your query.</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.info('Query data from the World Bank Group datasets available at https://financesone.worldbank.org/.', icon="ℹ️") # Use streamlit icon
+    st.info('Query data from the World Bank Group datasets publicly available at https://financesone.worldbank.org/.', icon="ℹ️") # Use streamlit icon
     # --- Example Queries ---
     st.markdown("""
     <div class="example-queries">
         <p>Example Questions:</p>
         <ul>
-            <li>"Get me the top 10 countries with the highest number of advisory projects approved in 2024"</li>
+            <li>"Get me the top 10 countries with the highest count of advisory projects approved in 2024"</li>
             <li>"Show me the sum of IBRD loans to India approved since 2020 per year"</li>
             <li>"Compare the average IFC investment size for 'Loan' products between Nepal and Bhutan."</li>
             <li>"What is the total gross guarantee exposure for MIGA in the Tourism sector in Senegal?"</li>
             <li>"Give me the top 10 IFC equity investments from China"</li>
-            <li>"Get me the status of all Projects in Ukraine."</li>
+            <li>"Get me the status of all IDA Projects approved in 2020 to St. Lucia."</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -2634,7 +2634,7 @@ def create_python_agent_blueprint():
 # 3. Update query agent system prompt to mention Python agent
 # (Edit generate_system_prompt)
 def generate_system_prompt() -> str:
-    prompt = f"""You are an expert SQL assistant designed to write sql queries.
+    prompt = f"""You are an expert SQL assistant designed to write sql queries. you will first come up with a plan to execute the user query and then execute the query following all the rules below.
 
 TARGET DATABASE:
 The target database (SQLite) details are provided in each request.
@@ -2647,19 +2647,17 @@ You MUST return your response as a valid QueryResponse object with these fields:
 CRITICAL RULES FOR SQL GENERATION:
 1. For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQLite query.
 2. ALWAYS GENERATE SQL: If the user is asking about specific data, records, amounts, or numbers, you MUST generate SQL - even if you're unsure about exact column names. Missing SQL is a critical error.
-3. PAY ATTENTION TO COLUMN NAMES: If a column name in the provided schema contains spaces or special characters, you MUST enclose it in double quotes (e.g., SELECT \"Total IFC Investment Amount\" FROM ...). Failure to quote such names will cause errors. Check for columns like \"IFC investment for Risk Management(Million USD)\", \"IFC investment for Guarantee(Million USD)\", etc.
-4. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
-5. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
-6. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
-7. DATA TYPES: Be mindful that many numeric columns might be stored as TEXT (e.g., \"(Million USD)\" columns). You might need to CAST them to a numeric type (e.g., CAST(\"IFC investment for Loan(Million USD)\" AS REAL)) before performing calculations like AVG or SUM. Handle potential non-numeric values gracefully if possible (e.g., WHERE clause to filter them out before casting, or use `IFNULL(CAST(... AS REAL), 0)`).
-8. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
-9. INCLUDE AT LEAST 3 COLUMNS: Include columns that would be needed to make sense of the query like project name and number. never give only one column in the SELECT query, always include at least 3 columns.
+3. AGGREGATIONS: For questions asking about totals, sums, or aggregations, use SQL aggregate functions (SUM, COUNT, AVG, etc.).
+4. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
+5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
+6. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
+7. INCLUDE AT LEAST 3 COLUMNS: Include columns that would be needed to make sense of the query like project name and number. never give only one column in the SELECT query, **always include at least 3 columns**.
+8. QUERY NOTES: *IMPORTANT* Pay attention to the query_notes in the metadata for each column. These are important instructions from the data stewards that you must follow. Use them to determine the correct column to use for the query.
 
 PYTHON AGENT TOOL:
 - You have access to a 'Python agent tool'.
 - If the user's request requires any data manipulation, analysis, or visualization using Python (e.g., using pandas, numpy, plotting charts like bar, line, pie), you MUST call this tool.
 - Pass the user's request and any necessary context (like the target database or previous results if applicable) to the Python agent tool.
-- Do NOT attempt to generate or execute Python code yourself.
 - The Python agent tool will handle the Python execution and visualization, and its result (code, explanation, visualization info) should be included in your final response if the tool was called.
 
 RESPONSE STRUCTURE:
