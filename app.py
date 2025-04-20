@@ -778,7 +778,7 @@ async def handle_user_message(message: str) -> None:
             logger.error(f"Failed to configure GenAI SDK for orchestrator: {config_err}", exc_info=True)
             raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.0-flash")
+        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.5-flash-preview-04-17")
         local_llm = GeminiModel(model_name=gemini_model_name)
         orchestrator_config = create_orchestrator_agent_blueprint()
         orchestrator_agent = Agent(local_llm, **orchestrator_config)
@@ -962,7 +962,7 @@ Based *only* on the user query and the table descriptions, which of the listed t
                 logger.error(f"Failed to configure GenAI SDK for table selection: {config_err}", exc_info=True)
                 raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_TABLE_SELECTION_MODEL", "gemini-1.5-flash")
+            gemini_model_name = st.secrets.get("GEMINI_TABLE_SELECTION_MODEL", "gemini-1.5-pro")
             local_llm = GeminiModel(model_name=gemini_model_name)
             logger.info(f"Instantiated GeminiModel: {gemini_model_name} for table selection.")
             table_selection_agent_blueprint = create_table_selection_agent_blueprint()
@@ -1031,7 +1031,9 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
     if 'last_chartable_data' not in st.session_state or st.session_state.last_chartable_data is None:
         logger.warning("No previous query result found to visualize")
         response = "I don't have any data from a previous query to visualize. Please run a database query first, and then I can create a chart from the results."
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        # Use last_db_key if available
+        db_key = st.session_state.get('last_db_key', 'unknown')
+        st.session_state.chat_history.append({"role": "assistant", "content": response, "db_key": db_key})
         return
     
     try:
@@ -1048,7 +1050,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         class SimpleDeps:
             def __init__(self, db_key):
                 self.db_key = db_key
-        local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_MAIN_MODEL", "gemini-1.5-flash"))
+        local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
         simple_deps = SimpleDeps(db_key)
         ctx = SimpleContext(local_llm, simple_deps)
         
@@ -1068,13 +1070,15 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
                     "streamlit_chart": {
                         "type": chart_type,
                         "data": df  # Use the original dataframe
-                    }
+                    },
+                    "db_key": db_key
                 })
             else:
                 error_msg = vis.error or "Unknown error"
                 st.session_state.chat_history.append({
                     "role": "assistant",
-                    "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}"
+                    "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}",
+                    "db_key": db_key
                 })
         else:
             content = "I've created a chart based on your data."
@@ -1087,14 +1091,16 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
                 "streamlit_chart": {
                     "type": chart_type,
                     "data": df  # Use the original dataframe
-                }
+                },
+                "db_key": db_key
             })
         logger.info(f"Chart response added to chat history")
     except Exception as e:
         logger.error(f"Error creating visualization: {str(e)}", exc_info=True)
         st.session_state.chat_history.append({
             "role": "assistant", 
-            "content": f"I'm sorry, I couldn't create the {chart_type} chart due to an error: {str(e)}"
+            "content": f"I'm sorry, I couldn't create the {chart_type} chart due to an error: {str(e)}",
+            "db_key": db_key
         })
 
 
@@ -1149,7 +1155,7 @@ Based *only* on the user query and the full schema provided, prune the schema st
                 logger.error(f"Failed to configure GenAI SDK for column pruning: {config_err}", exc_info=True)
                 raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_PRUNING_MODEL", "gemini-1.5-flash") # Use specific model if needed
+            gemini_model_name = st.secrets.get("GEMINI_PRUNING_MODEL", "gemini-2.0-flash") # Use specific model if needed
             local_llm_prune = GeminiModel(model_name=gemini_model_name)
             agent_config_prune = create_column_prune_agent_blueprint()
             agent_instance_prune = Agent(local_llm_prune, **agent_config_prune)
@@ -1199,7 +1205,7 @@ Based *only* on the user query and the full schema provided, prune the schema st
             logger.error(f"Failed to configure GenAI SDK post-confirmation: {config_err}", exc_info=True)
             return {"role": "assistant", "content": f"Internal Error: Failed to configure AI Service ({config_err})."}
 
-        gemini_model_name = st.secrets.get("GEMINI_MAIN_MODEL", "gemini-1.5-flash") # Changed default to flash for consistency
+        gemini_model_name = st.secrets.get("GEMINI_QUERY_MODEL", "gemini-2.5-flash-preview-04-17") # Changed default to flash for consistency
         local_llm = GeminiModel(model_name=gemini_model_name)
         agent_config_bp = create_query_agent_blueprint()
         # Instantiate the agent
@@ -1296,11 +1302,11 @@ User Request: {user_message}'''
 
             # Start building the final message dict
             # Prepend any earlier warnings (e.g., from pruning)
-            initial_content = f"[{target_db_key}] {response.text_message}"
+            initial_content = f"{response.text_message}"
             if assistant_chat_message and "content" in assistant_chat_message:
                 initial_content = f"{assistant_chat_message['content']}\n\n{initial_content}"
 
-            base_assistant_message = {"role": "assistant", "content": initial_content}
+            base_assistant_message = {"role": "assistant", "content": initial_content, "db_key": target_db_key}
             logger.info(f"Base assistant message: {base_assistant_message['content'][:100]}...")
 
             sql_results_df = None
@@ -1523,7 +1529,7 @@ User Request: {user_message}'''
                 class SimpleDeps:
                     def __init__(self, db_key):
                         self.db_key = db_key
-                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_MAIN_MODEL", "gemini-1.5-flash"))
+                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
                 simple_deps = SimpleDeps(db_key)
                 ctx = SimpleContext(local_llm, simple_deps)
                 async def run_python_agent():
@@ -1540,13 +1546,15 @@ User Request: {user_message}'''
                             "streamlit_chart": {
                                 "type": chart_type,
                                 "data": df
-                            }
+                            },
+                            "db_key": db_key
                         })
                     else:
                         error_msg = vis.error or "Unknown error"
                         st.session_state.chat_history.append({
                             "role": "assistant",
-                            "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}"
+                            "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}",
+                            "db_key": db_key
                         })
                 else:
                     content = "I've created a chart based on your data."
@@ -1558,7 +1566,8 @@ User Request: {user_message}'''
                         "streamlit_chart": {
                             "type": chart_type,
                             "data": df
-                        }
+                        },
+                        "db_key": db_key
                     })
                 # Clear the combined intent flag
                 del st.session_state['combined_sql_visualization']
@@ -1669,7 +1678,7 @@ async def continue_after_table_confirmation():
                 class SimpleDeps:
                     def __init__(self, db_key):
                         self.db_key = db_key
-                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_MAIN_MODEL", "gemini-1.5-flash"))
+                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
                 simple_deps = SimpleDeps(db_key)
                 ctx = SimpleContext(local_llm, simple_deps)
                 async def run_python_agent():
@@ -1686,13 +1695,15 @@ async def continue_after_table_confirmation():
                             "streamlit_chart": {
                                 "type": chart_type,
                                 "data": df
-                            }
+                            },
+                            "db_key": db_key
                         })
                     else:
                         error_msg = vis.error or "Unknown error"
                         st.session_state.chat_history.append({
                             "role": "assistant",
-                            "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}"
+                            "content": f"I couldn't create the {chart_type} chart. Error: {error_msg}",
+                            "db_key": db_key
                         })
                 else:
                     content = "I've created a chart based on your data."
@@ -1704,7 +1715,8 @@ async def continue_after_table_confirmation():
                         "streamlit_chart": {
                             "type": chart_type,
                             "data": df
-                        }
+                        },
+                        "db_key": db_key
                     })
                 # Clear the combined intent flag
                 del st.session_state['combined_sql_visualization']
@@ -1724,7 +1736,7 @@ async def continue_after_table_confirmation():
         logger.error("continue_after_table_confirmation finished without an assistant message object to append.")
         # Avoid adding duplicate errors if one was already added
         if not st.session_state.chat_history or st.session_state.chat_history[-1].get("role") != "assistant":
-             st.session_state.chat_history.append({"role": "assistant", "content": "Sorry, an internal error occurred, and no response could be generated."})
+             st.session_state.chat_history.append({"role": "assistant", "content": "Sorry, an internal error occurred, and no response could be generated.", "db_key": st.session_state.get("last_db_key", "unknown")})
 
     # Always clear the pending state after attempting continuation
     clear_pending_state()
@@ -2114,7 +2126,7 @@ def main():
                  error_msg = f"A critical error occurred running the table selection stage after DB confirmation: {str(e)}"
                  logger.exception(error_msg)
                  # Add error message to chat
-                 st.session_state.chat_history.append({"role": "assistant", "content": f"Sorry, a critical error occurred after DB confirmation: {str(e)}"})
+                 st.session_state.chat_history.append({"role": "assistant", "content": f"Sorry, a critical error occurred after DB confirmation: {str(e)}", "db_key": st.session_state.get("pending_target_db_key", "unknown")})
                  clear_pending_state() # Clear all state on critical error
             finally:
                 logger.info(f"continue_after_db_selection finished. Duration: {time.time() - start_time_db_cont:.2f}s")
@@ -2173,6 +2185,21 @@ def main():
             role = message.get("role", "assistant") # Default to assistant if role missing
             content = message.get("content", "")
             with st.chat_message(role):
+                # Display database badge if present
+                db_key = message.get("db_key")
+                if db_key and role == "assistant":
+                    # Map database keys to colors and icons
+                    db_settings = {
+                        "ifc": {"color": "blue", "icon": ":material/business:"},
+                        "miga": {"color": "green", "icon": ":material/shield:"},
+                        "ibrd": {"color": "violet", "icon": ":material/account_balance:"},
+                        "ida": {"color": "violet", "icon": ":material/account_balance:"},
+                        "unknown": {"color": "gray", "icon": ":material/database:"}
+                    }
+                    # Get appropriate settings or default
+                    settings = db_settings.get(db_key.lower(), {"color": "blue", "icon": ":material/database:"})
+                    st.badge(db_key, color=settings["color"], icon=settings["icon"])
+                
                 st.markdown(content) # Display main text content
 
                 # Display SQL details if present
@@ -2518,7 +2545,8 @@ def main():
                  error_content = f"Sorry, a critical internal error occurred: {str(e)}"
                  # Check if the last message is already this error
                  if not st.session_state.chat_history or st.session_state.chat_history[-1].get("content") != error_content:
-                     st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+                     db_key = st.session_state.get("last_db_key", "unknown")
+                     st.session_state.chat_history.append({"role": "assistant", "content": error_content, "db_key": db_key})
                  # Clear pending state if an error occurs during initial processing
                  clear_pending_state()
                  st.rerun() # Rerun to display the error
@@ -2685,7 +2713,7 @@ def create_orchestrator_agent_blueprint():
         "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to:
 
 1. ASSISTANT MODE:
-   - If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
+   - [DEFAULT MODE] If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
    - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IBRD and IDA lending data, IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
    - If the user asks about the dataset, tables, columns, or wants to know what data is available, you have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use this tool to answer questions about the structure, available columns, or descriptions.
    - If the user asks for clarification about the last response, help them as long as it is related to the World Bank database systems or the outputs of the previous database query.
