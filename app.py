@@ -1864,7 +1864,7 @@ async def continue_after_table_confirmation():
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
-                    return
+                    return 
                 
                 # Check for all-NaN DataFrame
                 if df.dropna(how='all').empty:
@@ -1876,7 +1876,7 @@ async def continue_after_table_confirmation():
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
-                    return
+                    return 
                 
                 # Log DataFrame content for debugging
                 logger.info(f"DataFrame for combined visualization: {len(df)} rows, {len(df.columns)} columns")
@@ -3392,6 +3392,7 @@ async def run_post_combined_confirmation():
     )
     st.session_state.chat_history.append(result_dict)
     clear_pending_state()
+    # return final_assistant_message_dict # This line causes NameError and is unnecessary
 
 
 if __name__ == "__main__":
