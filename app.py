@@ -184,9 +184,9 @@ class OrchestratorResult(BaseModel):
 
 def create_orchestrator_agent_blueprint():
     return {
-        "result_type": OrchestratorResult,
+        "output_type": OrchestratorResult, # Changed result_type to output_type
         "name": "Orchestrator Agent",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to:
 
 1. ASSISTANT MODE:
@@ -449,9 +449,9 @@ def create_table_selection_agent_blueprint():
     """Returns the CONFIGURATION for the Table Selection Agent."""
     # Note: No model instance passed here anymore
     return {
-        "result_type": SuggestedTables,
+        "output_type": SuggestedTables, # Changed result_type to output_type
         "name": "Table Selection Agent",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt": """You are an expert database assistant. Your task is to analyze a user's query and a list of available tables (with descriptions) in a specific database.\nIdentify the **minimum set of table names** from the provided list that are absolutely required to answer the user's query.\nConsider the table names and their descriptions carefully.\n\nYou have access to a tool called 'get_metadata_info' which can retrieve the list of columns and their descriptions for any table in the database. Use this tool to look up the columns and their descriptions for each table if needed, and use this information to make a more informed decision about which tables are relevant to the user query.\n\nOutput ONLY the list of relevant table names and a brief reasoning.""",
         "tools": [get_metadata_info],
     }
@@ -460,9 +460,9 @@ def create_query_agent_blueprint():
     """Returns the CONFIGURATION for the main (SQL-focused) Query Agent."""
     return {
         "deps_type": AgentDependencies,
-        "result_type": QueryResponse,
+        "output_type": QueryResponse, # Changed result_type to output_type
         "name": "SQL Query Assistant", # Renamed for clarity
-        "retries": 3,
+        "output_retries": 3, # Changed retries to output_retries
         "system_prompt_func": generate_system_prompt,
         "tools": [execute_sql, get_metadata_info], # Only SQL execution and metadata tools
         "result_validator_func": validate_query_result
@@ -472,9 +472,9 @@ def create_column_prune_agent_blueprint():
     """Returns the CONFIGURATION for the Column Pruning Agent."""
     # Note: No model instance passed here anymore
     return {
-        "result_type": PrunedSchemaResult,
+        "output_type": PrunedSchemaResult, # Changed result_type to output_type
         "name": "Column Pruning Agent",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Identify the intent of the user query and focus on identifying relevant columns needed for SQL query):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned for SELECT statement, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project name, project id and amount.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns needed to generate the correct SQL query.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nYour only task is SCHEMA PRUNING.\n""",
         "tools": [get_metadata_info],
     }
@@ -685,9 +685,9 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
             reasoning: str
         classifier_agent = Agent(
             local_llm,
-            result_type=NameBasedClassification,
+            output_type=NameBasedClassification, # Changed result_type to output_type
             name="Database Classifier",
-            retries=2,
+            output_retries=2, # Changed retries to output_retries
             system_prompt=classifier_system_prompt,
             tools=[get_metadata_info],
         )
@@ -1140,7 +1140,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
         
         # Create an agent context
-        local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-1.5-flash-latest"))
+        local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
         deps = AgentDependencies.create().with_db(db_key)
         context = RunContext(deps=deps, model=local_llm, usage=DEFAULT_USAGE_LIMITS, prompt=message)
         
@@ -1189,7 +1189,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         except Exception as e:
             logger.error(f"Error in visualization agent during follow-up: {str(e)}", exc_info=True)
             st.session_state.chat_history.append({
-                "role": "assistant",
+                "role": "assistant", 
                 "content": f"Error creating visualization: {str(e)}",
                 "db_key": db_key
             })
@@ -1311,9 +1311,9 @@ Based *only* on the user query and the full schema provided, prune the schema st
         local_query_agent = Agent(
             local_llm,
             deps_type=agent_config_bp["deps_type"],
-            result_type=agent_config_bp["result_type"],
+            output_type=agent_config_bp["output_type"],
             name=agent_config_bp["name"],
-            retries=agent_config_bp["retries"],
+            output_retries=agent_config_bp["output_retries"],
         )
         # Apply configurations from the blueprint
         local_query_agent.system_prompt(agent_config_bp["system_prompt_func"])
@@ -1705,7 +1705,7 @@ User Request: {user_message}'''
                 schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
                 
                 # Create a context for the visualization agent
-                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-1.5-flash-latest"))
+                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
                 deps = AgentDependencies.create().with_db(db_key)
                 context = RunContext(deps=deps, model=local_llm, usage=DEFAULT_USAGE_LIMITS, prompt=user_message)
                 
@@ -2383,97 +2383,78 @@ def main():
                     elif python_result.get("warning"):
                          st.warning(f"Python Code Warning: {python_result['warning']}")
 
-                # Display Streamlit chart if present (legacy format)
+                # Display Streamlit chart if present
+                # This section handles charts generated by the main SQL -> Visualization agent flow
                 if "streamlit_chart" in message and isinstance(message["streamlit_chart"], dict):
                     st.markdown("**Visualization:**")
                     try:
-                        chart_type = message["streamlit_chart"].get("type")
-                        df = message["streamlit_chart"].get("data")
-                        # Ensure df is a pandas DataFrame
-                        if isinstance(df, pd.DataFrame):
-                            if not df.empty:
+                        chart_info = message["streamlit_chart"]
+                        chart_type = chart_info.get("chart_type") # CORRECT KEY
+                        df = chart_info.get("data")
+                        x_col = chart_info.get("x")
+                        y_col = chart_info.get("y")
+                        color_col = chart_info.get("color")
+                        title = chart_info.get("title", "Chart")
+
+                        # Ensure df is a pandas DataFrame and has the required columns
+                        if isinstance(df, pd.DataFrame) and not df.empty:
+                            if x_col and x_col in df.columns and y_col and y_col in df.columns:
+                                # Prepare dataframe for plotting (set index)
+                                plot_df = df.set_index(x_col)
+
+                                # Select only the y_col for basic charts
+                                if color_col and color_col in plot_df.columns:
+                                     # If color is specified, keep it for potential use (e.g., scatter)
+                                     # For bar/line, Streamlit often handles color based on columns selected
+                                     plot_data = plot_df[[y_col, color_col]]
+                                else:
+                                     plot_data = plot_df[[y_col]] # Select only y_col
+
                                 if chart_type == "bar":
-                                    st.bar_chart(df)
+                                    st.bar_chart(plot_data)
                                 elif chart_type == "line":
-                                    st.line_chart(df)
+                                    st.line_chart(plot_data)
                                 elif chart_type == "area":
-                                    st.area_chart(df)
+                                    st.area_chart(plot_data)
                                 elif chart_type == "scatter":
-                                    # Basic scatter needs x and y
-                                    if len(df.columns) >= 2:
-                                        # Use column names directly if available and sensible
-                                        st.scatter_chart(df) # Let streamlit infer columns
-                                    else:
-                                        st.warning("Scatter plot requires at least two data columns.")
+                                    # Use original df and specify x, y, color for scatter
+                                    st.scatter_chart(df, x=x_col, y=y_col, color=color_col)
                                 elif chart_type == "pie":
-                                    # Plotly pie chart logic
-                                    if len(df.columns) > 0:
-                                        values_col = df.columns[0]
-                                        names_col = df.index.name # Prefer index name for labels
-                                        if not names_col and len(df.columns) > 1:
-                                            names_col = df.columns[1] # Use second column as labels
-                                        
-                                        try:
-                                            import plotly.express as px
-                                            fig = px.pie(df, 
-                                                        values=values_col, 
-                                                        names=names_col if names_col else df.index,
-                                                        title=f"Pie Chart")
+                                    # Plotly pie chart logic using specified columns
+                                    try:
+                                        import plotly.express as px
+                                        # Ensure y_col is numeric for values
+                                        df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
+                                        df.dropna(subset=[y_col], inplace=True)
+                                        if not df.empty:
+                                            fig = px.pie(df,
+                                                         values=y_col,
+                                                         names=x_col, # Use x_col for names
+                                                         title=title,
+                                                         color=color_col)
                                             st.plotly_chart(fig, use_container_width=True)
-                                        except Exception as px_e:
-                                            st.error(f"Error creating pie chart: {str(px_e)}")
-                                    else:
-                                        st.warning("Cannot generate pie chart: Data is empty or missing columns.")
+                                        else:
+                                            st.warning(f"No numeric data found in column '{y_col}' for pie chart.")
+                                    except Exception as px_e:
+                                        st.error(f"Error creating pie chart: {str(px_e)}")
                                 else:
                                     # Unknown chart type fallback
+                                    st.warning(f"Unsupported chart type: {chart_type}. Displaying data table.")
                                     st.dataframe(df)
                             else:
-                                st.warning(f"Cannot generate {chart_type} chart: Received empty data.")
+                                st.warning(f"Cannot generate chart: X ({x_col}) or Y ({y_col}) columns not found in data.")
+                                st.dataframe(df) # Show data if columns missing
                         else:
-                            st.warning(f"Cannot generate chart: Invalid data format received (expected DataFrame). Type: {type(df)}")
+                            st.warning(f"Cannot generate chart: Invalid or empty data provided.")
                     except Exception as e:
                         st.error(f"Error displaying visualization: {str(e)}")
                         logger.exception(f"Error rendering chart: {e}")
 
-                # NEW: Display charts using the "chart" key format from handle_follow_up_chart
-                if "chart" in message and isinstance(message["chart"], dict):
-                    st.markdown("**Visualization:**")
-                    try:
-                        chart_data = message["chart"]
-                        chart_type = chart_data.get("type", "bar")
-                        df = chart_data.get("data")
-                        
-                        # Check if we have valid data
-                        if isinstance(df, pd.DataFrame) and not df.empty:
-                            if chart_type == "bar":
-                                st.bar_chart(df)
-                            elif chart_type == "line":
-                                st.line_chart(df)
-                            elif chart_type == "area":
-                                st.area_chart(df)
-                            elif chart_type == "pie":
-                                # For pie charts we need a bit more setup
-                                try:
-                                    if len(df.columns) >= 2:
-                                        # Use plotly for pie charts 
-                                        import plotly.express as px
-                                        fig = px.pie(df, 
-                                                    names=df.iloc[:, 0], 
-                                                    values=df.iloc[:, 1], 
-                                                    title=f"Pie Chart - {chart_data.get('db_key', 'Database')}")
-                                        st.plotly_chart(fig, use_container_width=True)
-                                    else:
-                                        st.warning("Pie chart requires at least 2 columns")
-                                except Exception as e:
-                                    st.error(f"Error displaying pie chart: {str(e)}")
-                            else:
-                                # Default to showing the dataframe
-                                st.dataframe(df)
-                        else:
-                            st.warning("Chart data is empty or not available")
-                    except Exception as e:
-                        st.error(f"Error displaying chart: {str(e)}")
-                        logger.exception(f"Error rendering chart: {e}")
+                # --- REMOVE OR COMMENT OUT the legacy/duplicate "chart" block --- 
+                # # Display charts using the "chart" key format from handle_follow_up_chart
+                # if "chart" in message and isinstance(message["chart"], dict):
+                #    st.markdown("**Visualization:**")
+                #    # ... (Keep commented out or remove) ...
 
                 # Display Python details if present
                 python_result = message.get("python_result")
@@ -2834,9 +2815,9 @@ class PythonAgentResult(BaseModel):
 
 def create_python_agent_blueprint():
     return {
-        "result_type": PythonAgentResult,
+        "output_type": PythonAgentResult, # Changed result_type to output_type
         "name": "Python Data & Visualization Agent",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt": '''You are a Python data analysis and visualization agent. Your job is to:
 - Accept requests for data manipulation, analysis, or visualization using pandas DataFrames (named 'df') and numpy.
 - If the user requests a chart (bar, line, pie, scatter, etc.) of the last DataFrame, call the `visualize_last_dataframe` tool with the appropriate chart type and context.
@@ -2917,9 +2898,9 @@ Your final output MUST be the structured 'QueryResponse' object. Remember the vi
 # 4. Update orchestrator system prompt to mention Python agent, not visualization tool
 def create_orchestrator_agent_blueprint():
     return {
-        "result_type": OrchestratorResult,
+        "output_type": OrchestratorResult, # Changed result_type to output_type
         "name": "Orchestrator Agent",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to:
 
 1. ASSISTANT MODE:
@@ -3024,9 +3005,9 @@ def create_visualization_agent_blueprint():
     """Returns the CONFIGURATION for the Visualization Expert Agent"""
     return {
         "deps_type": AgentDependencies,
-        "result_type": VisualizationAgentResult,
+        "output_type": VisualizationAgentResult, # Changed result_type to output_type
         "name": "Visualization Expert",
-        "retries": 2,
+        "output_retries": 2, # Changed retries to output_retries
         "system_prompt_func": generate_visualization_system_prompt,
         "tools": [get_metadata_info],  # Only needs metadata tool
         "result_validator_func": None  # Can add validation later if needed
@@ -3039,9 +3020,9 @@ def get_visualization_agent(local_llm):
     visualization_agent = Agent(
         local_llm,
         deps_type=visualization_agent_blueprint["deps_type"],
-        result_type=visualization_agent_blueprint["result_type"],
+        output_type=visualization_agent_blueprint["output_type"], # Changed result_type to output_type
         name=visualization_agent_blueprint["name"],
-        retries=visualization_agent_blueprint["retries"],
+        output_retries=visualization_agent_blueprint["output_retries"], # Changed retries to output_retries
     )
     visualization_agent.system_prompt(visualization_agent_blueprint["system_prompt_func"])
     for tool_func in visualization_agent_blueprint["tools"]:
@@ -3090,41 +3071,30 @@ async def call_visualization_agent(
         null_counts = df.isnull().sum()
         non_zero_nulls = null_counts[null_counts > 0]
         logger.info(f"Null counts in columns: {non_zero_nulls.to_dict()}")
-    # logger.info(f"DataFrame preview (first 2 rows):\n{df.head(2).to_string()}") # Temporarily removed preview
+    logger.info(f"DataFrame preview (first 2 rows):\n{df.head(2).to_string()}")
     logger.info(f"User query: '{user_query}'")
     
     # Build the prompt with all necessary context
-    # --- SIMPLIFIED PROMPT --- 
     prompt = f"""
 USER QUERY OR VISUALIZATION REQUEST:
 {user_query}
 
-AVAILABLE COLUMNS:
-{df.columns.tolist()}
+DATA SUMMARY:
+DataFrame with {len(df)} rows and {df.columns.size} columns.
 
-Based on the user query and the available columns, determine the most appropriate visualization.
+Columns and their types:
+{', '.join([f"{col} ({df[col].dtype})" for col in df.columns])}
+
+First {min(2, len(df))} rows of the data for reference:
+{df.head(2).to_string()}
+
+DATABASE CONTEXT:
+Database: {db_key}
+{pruned_schema}
+
+Based on the above information, determine the most appropriate visualization for this data that answers the user's query.
 """
-    # --- ORIGINAL PROMPT (COMMENTED OUT) ---
-    # prompt = f"""
-# USER QUERY OR VISUALIZATION REQUEST:
-# {user_query}
-# 
-# DATA SUMMARY:
-# DataFrame with {len(df)} rows and {df.columns.size} columns.
-# 
-# Columns and their types:
-# {", ".join([f"{col} ({df[col].dtype})" for col in df.columns])}
-# 
-# First {min(2, len(df))} rows of the data for reference:
-# {df.head(2).to_string()}
-# 
-# DATABASE CONTEXT:
-# Database: {db_key}
-# {pruned_schema}
-# 
-# Based on the above information, determine the most appropriate visualization for this data that answers the user's query.
-# """
-
+    
     # Check if prompt is empty
     if not prompt or not prompt.strip():
         logger.error("Visualization agent called with empty prompt. Aborting.")
@@ -3148,11 +3118,11 @@ Based on the user query and the available columns, determine the most appropriat
     deps = ctx.deps if ctx.deps else AgentDependencies.create().with_db(db_key)
     
     # Call the agent
-    logger.info(f"Calling visualization agent with prompt of length {len(prompt)}")
+    logger.info(f"Calling visualization agent with positional prompt of length {len(prompt)}")
     # Define usage object directly
     usage = Usage()
     # Pass prompt, deps, and usage object
-    result = await visualization_agent.run(prompt=prompt, deps=deps, usage=usage)
+    result = await visualization_agent.run(prompt, deps=deps, usage=usage)
     
     logger.info(f"Visualization agent recommended {result.output.chart_type} chart with x={result.output.x_column}, y={result.output.y_column}")
     return result.output
@@ -3188,9 +3158,9 @@ async def run_sql_modification(
         local_query_agent = Agent(
             local_llm,
             deps_type=agent_config_bp["deps_type"],
-            result_type=agent_config_bp["result_type"],
+            output_type=agent_config_bp["output_type"],
             name=agent_config_bp["name"],
-            retries=agent_config_bp["retries"],
+            output_retries=agent_config_bp["output_retries"],
         )
         local_query_agent.system_prompt(agent_config_bp["system_prompt_func"])
         for tool_func in agent_config_bp["tools"]:
@@ -3329,19 +3299,22 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
             chart_type = None
             if sql_results_df is not None and not sql_results_df.empty and response.visualization_requested:
                 logger.info("Visualization requested in SQL modification, calling visualization agent")
-                
+
                 # Create a RunContext for the visualization agent
                 viz_context = RunContext(deps=deps, model=local_llm, usage=usage, prompt=user_message)
                 try:
-                    # Call the dedicated visualization agent
-                    visualization_result = await call_visualization_agent(
-                        viz_context, 
-                        sql_results_df, 
-                        user_message, 
-                        last_target_db_key,
-                        last_pruned_schema
-                    )
-                    
+                    # *** WRAP the call in run_async_task ***
+                    async def run_viz_agent_mod():
+                        return await call_visualization_agent(
+                            viz_context,
+                            sql_results_df,
+                            user_message,
+                            last_target_db_key,
+                            last_pruned_schema
+                        )
+
+                    visualization_result = run_async_task(run_viz_agent_mod)
+
                     # Create the streamlit_chart dictionary for display
                     if visualization_result:
                         streamlit_chart = {

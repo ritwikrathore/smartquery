@@ -7,24 +7,30 @@ Try it out at: https://smartquery.streamlit.app/
 
 ## Features
 
-- **Natural Language Queries**: Ask questions about your data in plain English
-- **SQL Generation**: Automatically converts natural language to SQL queries
-- **Data Visualization**: Creates charts and graphs based on query results
-- **Explanation**: Provides clear explanations of generated SQL and Python code
-- **Interactive Interface**: User-friendly chat interface for data exploration
+- **Natural Language Queries**: Ask questions about your data in plain English.
+- **Smart Request Routing**: An Orchestrator agent routes requests for general chat, database queries, or visualization.
+- **Automatic Database Identification**: Identifies the most relevant database based on your query and metadata, with user confirmation if needed.
+- **Interactive Table Selection**: Suggests relevant tables for your query and allows you to confirm or modify the selection.
+- **Intelligent SQL Generation**: Converts natural language to SQL, leveraging pruned schemas and metadata.
+- **Query Modification**: Easily modify previous queries with follow-up instructions.
+- **Data Visualization**: An expert agent recommends and generates appropriate charts (bar, line, pie, etc.) based on the query results and user request.
+- **Python Data Preparation**: Handles simple data preparation steps if needed before visualization.
+- **Explanation**: Provides clear explanations of generated SQL and suggested visualizations.
+- **Contextual Conversation**: Maintains conversation history for follow-up questions and context.
+- **Interactive Interface**: User-friendly chat interface for data exploration.
 
 ## Installation
 
 ### Prerequisites
 
 - Python 3.8+
-- SQLite database (default path: `assets/data1.sqlite`)
+- SQLite database (default path: `assets/dbs/db.sqlite`)
 
 ### Setup
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/smartquery.git
+   git clone https://github.com/ritwikathore/smartquery.git
    cd smartquery
    ```
 
@@ -37,7 +43,7 @@ Try it out at: https://smartquery.streamlit.app/
    ```toml
    GOOGLE_API_KEY = "your_google_api_key_here"
    GEMINI_MODEL = "gemini-2.0-flash"  # or another Gemini model
-   DATABASE_PATH = "assets/data1.sqlite"
+   DATABASE_PATH = "assets/dbs/db.sqlite"
    ```
 
 ## Usage
@@ -50,36 +56,52 @@ Try it out at: https://smartquery.streamlit.app/
 2. Open your browser and navigate to the URL displayed in the terminal (typically http://localhost:8501)
 
 3. Begin asking questions about your data:
-   - "What are the total investments per product line?"
-   - "Show me the top 5 investments in China, sorted by size."
-   - "Compare the average investment size for 'Loan' products between India and Vietnam."
-   - "Visualize the distribution of product lines using a pie chart."
-   - "Which country has the highest total investment? Create a bar chart showing the top 10 countries."
+   - "Get me the top 10 countries with the highest count of advisory projects approved in 2024"
+   - "Show me the sum of IBRD loans to India approved since 2020 per year"
+   - "Compare the average IFC investment size for 'Loan' products between Nepal and Bhutan."
+   - "What is the total gross guarantee exposure for MIGA in the Tourism sector in Senegal?"
+   - "Give me the top 10 IFC equity investments from China"
+   - "Get me the status of all IDA Projects approved in 2020 to St. Lucia."
+   - (After getting results) "Can you show that as a bar chart?"
+   - (After getting results) "Now add the project sector to the results"
 
 ## How It Works
 
-1. **User Input**: The user enters a natural language question about their data
-2. **Database Schema Analysis**: The system retrieves the database schema to understand available tables and columns
-3. **AI Processing**: Google Gemini processes the query and generates appropriate SQL and/or Python code
-4. **SQL Execution**: The generated SQL query is executed against the database
-5. **Visualization**: If requested, Python code is executed to create visualizations using matplotlib/seaborn
-6. **Response**: Results are displayed in the chat interface, including data tables and visualizations
+SmartQuery employs a multi-agent system powered by Google Gemini to process user requests:
+
+1.  **User Input**: The user enters a natural language question via the Streamlit chat interface.
+2.  **Modification Check**: The system first checks if the query is a modification of the *last* SQL query. If so, it directly calls the SQL Query Assistant with the previous context.
+3.  **Follow-up Visualization Check**: If it's not a modification, it checks if it's a simple request to visualize the *last* results. If so, it calls the Visualization Expert Agent directly.
+4.  **Orchestration**: For new queries or general chat, the **Orchestrator Agent** classifies the user's intent (`assistant`, `database_query`, or `visualization`).
+    *   If `assistant`, it responds directly.
+    *   If `visualization` (and the query implies data retrieval is also needed), it sets a flag and proceeds to the database query flow.
+    *   If `database_query`, it proceeds to the database query flow.
+5.  **Database Classification**: The **Database Classifier Agent** analyzes the query and database metadata (descriptions, tables, columns) to determine the target database. It prompts the user for confirmation if unsure.
+6.  **Table Selection**: The **Table Selection Agent** analyzes the query and table descriptions for the chosen database, suggesting the most relevant tables. It prompts the user to confirm or modify the selection.
+7.  **Schema Pruning**: The **Column Pruning Agent** receives the full schema for the confirmed tables and prunes it down to only the columns likely needed for the specific query, improving efficiency and accuracy.
+8.  **SQL Generation & Execution**: The **SQL Query Assistant** takes the user query and the pruned schema to generate the final SQL query. It utilizes tools to execute the SQL (`execute_sql`) against the database and can fetch metadata (`get_metadata_info`) if needed. It can also call a **Python Agent** (`call_python_agent`) for complex data manipulations (though simple preparation might be handled directly).
+9.  **Visualization Recommendation & Generation**: If visualization was requested (either initially or as a follow-up), the **Visualization Expert Agent** analyzes the resulting data (DataFrame), the user query, and schema to determine the best chart type and parameters (`x_column`, `y_column`, `title`, etc.). The recommended chart is then generated and displayed.
+10. **Response**: The final response, including text explanations, the SQL query, query results (as a table), and any generated visualizations, is displayed in the chat interface. Context (like the last SQL query, schema, and data) is stored for potential follow-up modifications or visualizations.
 
 ## Dependencies
 
 - `streamlit`: Web application framework
 - `google-generativeai`: Google Gemini AI SDK
 - `pydantic-ai`: Agent framework for structured AI interactions
+- `pydantic`: Data validation
 - `pandas`: Data manipulation and analysis
-- `matplotlib`: Data visualization
 - `numpy`: Numerical computing
+- `matplotlib`: Data visualization (used indirectly by Streamlit charts)
+- `plotly`: Data visualization (especially for pie charts)
 - `sqlite3`: Database interface
+- `nest_asyncio`: Allows nested asyncio event loops (for Streamlit compatibility with Gemini)
+- `langchain`: For conversational memory (`ConversationBufferMemory`)
 
 ## Project Structure
 
 - `app.py`: Main application file
 - `assets/`: Contains static assets and database
-  - `data1.sqlite`: Default SQLite database
+  - `db.sqlite`: Default SQLite database
   - `correct.png`: UI element for feature highlights
 
 ## Troubleshooting
