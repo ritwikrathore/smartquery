@@ -1082,22 +1082,40 @@ Based *only* on the user query and the table descriptions, which of the listed t
             table_agent_reasoning = f"An error occurred during table selection: {str(e)}. Please select the tables needed."
             selected_tables = [] # Ensure empty list on exception
 
-        # --- Set State for Confirmation ---
-        # This state will be picked up by the UI in the next Streamlit rerun
-        st.session_state.table_confirmation_pending = True
-        st.session_state.pending_user_message = user_message
-        st.session_state.pending_db_metadata = db_metadata
-        st.session_state.pending_target_db_key = target_db_key
-        st.session_state.pending_target_db_path = target_db_path
-        db_entry = db_metadata.get('databases', {}).get(target_db_key)
-        all_tables = list(db_entry.get("tables", {}).keys()) if db_entry else []
-        st.session_state.all_tables = all_tables
-        # Set candidate tables based on agent result (might be empty)
-        st.session_state.candidate_tables = selected_tables
-        st.session_state.table_agent_reasoning = table_agent_reasoning
-        st.session_state.combined_confirmation_pending = True
-        logger.info("Pausing for COMBINED DB & Table confirmation. State saved.")
-        # No return needed here, state is set, Streamlit will rerun
+        # --- Set State for Confirmation OR Proceed in YOLO Mode ---        
+        if st.session_state.yolo_mode:
+            logger.info("YOLO Mode enabled. Skipping confirmation and proceeding with AI-selected tables.")
+            # Set confirmed tables directly
+            st.session_state.confirmed_tables = selected_tables
+            # Ensure necessary pending state is set for continuation
+            st.session_state.pending_user_message = user_message
+            st.session_state.pending_db_metadata = db_metadata
+            st.session_state.pending_target_db_key = target_db_key
+            st.session_state.pending_target_db_path = target_db_path
+            # Clear confirmation flags just in case
+            st.session_state.combined_confirmation_pending = False
+            st.session_state.table_confirmation_pending = False
+            # Immediately call the continuation function
+            logger.info("Calling continue_after_table_confirmation directly in YOLO mode.")
+            # Wrap the async call
+            async def continue_yolo():
+                await continue_after_table_confirmation()
+            run_async_task(continue_yolo)
+            # No return needed here, state is set, async task launched, Streamlit will rerun
+        else:
+            # Normal Mode: Set state for combined confirmation UI
+            st.session_state.combined_confirmation_pending = True
+            st.session_state.pending_user_message = user_message
+            st.session_state.pending_db_metadata = db_metadata
+            st.session_state.pending_target_db_key = target_db_key
+            st.session_state.pending_target_db_path = target_db_path
+            db_entry = db_metadata.get('databases', {}).get(target_db_key)
+            all_tables = list(db_entry.get("tables", {}).keys()) if db_entry else []
+            st.session_state.all_tables = all_tables
+            st.session_state.candidate_tables = selected_tables
+            st.session_state.table_agent_reasoning = table_agent_reasoning
+            logger.info("YOLO Mode OFF. Pausing for COMBINED DB & Table confirmation. State saved.")
+            # No return needed here, state is set, Streamlit will rerun
 
     except Exception as e:
         error_msg = f"A critical error occurred during table selection stage: {str(e)}"
@@ -2173,6 +2191,8 @@ def main():
         'confirmed_db_key': None,       # Stores the user-confirmed DB key
         # Hybrid Combined Confirmation
         'combined_confirmation_pending': False,  # New combined confirmation flag
+        # YOLO Mode
+        'yolo_mode': False,             # Skip confirmation toggle
     }
     for key, default_value in default_session_state.items():
         if key not in st.session_state:
@@ -2325,30 +2345,34 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Clear Chat Button
-    if st.button("Clear Chat History", key="clear_chat"):
-        st.session_state.chat_history = []
-        st.session_state.last_result = None
-        st.session_state.last_db_key = None
-        st.session_state.agent_message_history = []
-        st.session_state.last_chartable_data = None
-        st.session_state.last_chartable_db_key = None
-        # Clear SQL query modification context
-        st.session_state.last_sql_query = None
-        st.session_state.last_pruned_schema = None
-        st.session_state.last_target_db_key = None
-        st.session_state.last_target_db_path = None
-        st.session_state.last_table_names = None
-        # Clear LangChain memory as well
-        if 'lc_memory' in st.session_state:
-             st.session_state.lc_memory.clear()
-        clear_pending_state() # Clear custom pending states
-        logger.info("Chat history, LangChain memory, and associated states cleared by user.")
-        st.rerun()
+    # Clear Chat Button and YOLO Toggle
+    col1, col2 = st.columns([1.5, 0.5]) # Adjust ratio as needed
+    with col1:
+        if st.button("Clear Chat History", key="clear_chat"):
+            st.session_state.chat_history = []
+            st.session_state.last_result = None
+            st.session_state.last_db_key = None
+            st.session_state.agent_message_history = []
+            st.session_state.last_chartable_data = None
+            st.session_state.last_chartable_db_key = None
+            # Clear SQL query modification context
+            st.session_state.last_sql_query = None
+            st.session_state.last_pruned_schema = None
+            st.session_state.last_target_db_key = None
+            st.session_state.last_target_db_path = None
+            st.session_state.last_table_names = None
+            # Clear LangChain memory as well
+            if 'lc_memory' in st.session_state:
+                 st.session_state.lc_memory.clear()
+            clear_pending_state() # Clear custom pending states
+            logger.info("Chat history, LangChain memory, and associated states cleared by user.")
+            st.rerun()
+    with col2:
+        st.toggle("YOLO Mode🚀", value=st.session_state.yolo_mode, key="yolo_mode", help="When enabled, automatically proceed with AI-selected database and tables, skipping user confirmation unless essential.")
+
 
     # --- ASYNC CONTINUATION HANDLING --- #
     # This section handles logic that needs to run *after* a confirmation action
-    # from a previous Streamlit rerun has set the corresponding state.
 
     # 1. Handle Database Selection Continuation
     if st.session_state.get("confirmed_db_key") is not None and not st.session_state.get("db_selection_pending", False):
@@ -2357,16 +2381,19 @@ def main():
 
     # 2. Handle Combined Confirmation Continuation
     if st.session_state.get("combined_confirmation_pending", False) and st.session_state.get("confirmed_tables") is not None:
+        # This condition is only met *before* the button is pressed and state is cleared.
         try:
             with st.spinner("Processing confirmed selections and generating query..."):
                 async def combined_wrapper_func():
+                    # This calls run_post_combined_confirmation
                     return await run_post_combined_confirmation()
                 run_async_task(combined_wrapper_func)
-                st.rerun()
+                st.rerun() # This rerun happens too early, before the async task completes.
         except Exception as e:
             st.error(f"An error occurred while processing your query: {str(e)}")
             clear_pending_state()
             st.rerun()
+
 
     # --- Chat Interface --- #
     # This part displays the chat history and the confirmation UIs if pending
@@ -2709,11 +2736,32 @@ def main():
                      db_display_name = db_key
                      # Safely get db_entry
                      db_entry = db_metadata.get('databases', {}).get(db_key, {})
-                     db_display_name = f"{db_entry.get('database_name', db_key)} ({db_key})"
+                     db_display_name = f"{db_entry.get('database_name', db_key)}"
 
                      st.info(f"**Selected Database:** {db_display_name}", icon="✅")
                      if db_selection_reasoning:
                          st.caption(f"**Reason:** {db_selection_reasoning}")
+                     
+                     # --- Add Change Database button here --- 
+                     if st.button("Change Database", key="change_db_combined_button"): # Added unique key
+                         st.session_state.db_selection_pending = True
+                         st.session_state.combined_confirmation_pending = False
+                         # Ensure metadata is loaded if needed (similar to table selection logic)
+                         if "pending_db_metadata" not in st.session_state or not st.session_state.pending_db_metadata:
+                             logger.warning("Reloading missing db_metadata when changing database from combined UI.")
+                             _db_metadata = load_db_metadata()
+                             if _db_metadata:
+                                 st.session_state.pending_db_metadata = _db_metadata
+                                 st.session_state.pending_db_keys = list(_db_metadata.get('databases', {}).keys())
+                             else:
+                                 st.error("Failed to reload database metadata.")
+                                 st.rerun()
+                         else:
+                             st.session_state.pending_db_keys = list(st.session_state.pending_db_metadata.get('databases', {}).keys())
+                         st.session_state.db_selection_reason = "Please select a different database for your query."
+                         st.rerun()
+                     # --- End Change Database button ---
+                     
                      st.info(f"**Table Selection for {db_key}:** Please confirm or select the tables needed.", icon="ℹ️")
                      if candidate_tables:
                          st.markdown(f"Suggested tables: `{', '.join(candidate_tables)}`")
@@ -2728,34 +2776,24 @@ def main():
                          default=candidate_tables,
                          key="combined_table_confirm_multiselect"
                      )
-                     col1, col2 = st.columns([1,3])
-                     with col1:
-                         if st.button("Confirm Selections"):
-                             if not selected_tables:
-                                 st.warning("Please select at least one table.")
-                             else:
-                                 st.session_state.confirmed_tables = selected_tables
-                                 # Clear combined flag after confirmation
-                                 st.session_state.combined_confirmation_pending = False
-                                 st.rerun()
-                     with col2:
-                         if st.button("Change Database Instead"):
-                             st.session_state.db_selection_pending = True
+                     
+                     # --- Add Confirm button here --- 
+                     if st.button("Confirm Selections", key="confirm_selections_combined_button"): # Added unique key
+                         if not selected_tables:
+                             st.warning("Please select at least one table.")
+                         else:
+                             st.session_state.confirmed_tables = selected_tables
+                             # Clear combined flag after confirmation
                              st.session_state.combined_confirmation_pending = False
-                             # Ensure metadata is loaded if needed (similar to table selection logic)
-                             if "pending_db_metadata" not in st.session_state or not st.session_state.pending_db_metadata:
-                                 logger.warning("Reloading missing db_metadata when changing database from combined UI.")
-                                 _db_metadata = load_db_metadata()
-                                 if _db_metadata:
-                                     st.session_state.pending_db_metadata = _db_metadata
-                                     st.session_state.pending_db_keys = list(_db_metadata.get('databases', {}).keys())
-                                 else:
-                                     st.error("Failed to reload database metadata.")
-                                     st.rerun()
-                             else:
-                                 st.session_state.pending_db_keys = list(st.session_state.pending_db_metadata.get('databases', {}).keys())
-                             st.session_state.db_selection_reason = "Please select a different database for your query."
+                             # --- Trigger continuation --- 
+                             logger.info("User confirmed selections, triggering run_post_combined_confirmation.")
+                             with st.spinner("Processing confirmed selections and generating query..."):
+                                 async def combined_wrapper_func():
+                                     return await run_post_combined_confirmation()
+                                 run_async_task(combined_wrapper_func)
+                             # Rerun to potentially show spinner and then results
                              st.rerun()
+                    # --- End Confirm button ---
 
     st.markdown('</div>', unsafe_allow_html=True) # End chat-messages-container
 
