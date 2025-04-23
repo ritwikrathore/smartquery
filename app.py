@@ -397,24 +397,7 @@ async def validate_query_result(ctx: RunContext[AgentDependencies], result: Quer
                 logger.warning(f"Raising ModelRetry due to Unexpected SQL Error. Response details: text='{result.text_message[:50]}...', sql='{cleaned_sql[:100]}...'")
                 raise ModelRetry(f"An unexpected error occurred during SQL validation: {str(e)}. Please try generating the SQL query again.") from e
 
-    # --- Check for Missing SQL when Expected ---
-    # (Removed data_query_keywords and related keyword-based fallback logic)
-    # The orchestrator/agents are now responsible for determining query type and SQL generation.
 
-
-    # --- Visualization Validation ---
-    # We no longer expect the SQL agent to suggest charts or decline.
-    # We only care if the visualization_requested flag is set appropriately (optional check).
-    # visualization_keywords = ['chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization', 'visualisation', 'bar chart', 'pie chart', 'histogram', 'line graph', 'scatter plot']
-    # is_visualization_request_in_query = any(keyword in original_user_question.lower() for keyword in visualization_keywords)
-
-    # # Optional: Check if flag matches keywords (can be noisy)
-    # if is_visualization_request_in_query and not result.visualization_requested:
-    #     logger.warning(f"Visualization keywords detected, but visualization_requested flag is False. Query: {original_user_question[:100]}...")
-    #     # Maybe raise ModelRetry("Keywords suggest visualization, but flag not set.") - decide if needed
-    # elif not is_visualization_request_in_query and result.visualization_requested:
-    #      logger.warning(f"No visualization keywords, but visualization_requested flag is True. Query: {original_user_question[:100]}...")
-    #      # Maybe raise ModelRetry("Flag set, but no keywords suggest visualization.") - decide if needed
 
     logger.info("Result validation completed successfully.")
     return result
@@ -784,10 +767,6 @@ async def handle_user_message(message: str) -> None:
         
         # Get the config directly from the blueprint function
         orchestrator_config = create_orchestrator_agent_blueprint() 
-        
-        # Remove the temporary class definition and prompt update here
-        # orchestrator_config["output_type"] = OrchestratorResultWithMod 
-        # orchestrator_config["system_prompt"] = '''...''' 
 
         # Instantiate the agent using the configuration dictionary
         # The 'tools' are already defined in orchestrator_config
@@ -1416,7 +1395,7 @@ User Request: {user_message}'''
             if assistant_chat_message and "content" in assistant_chat_message:
                 initial_content = f"{assistant_chat_message['content']}\n\n{initial_content}"
 
-            base_assistant_message = {"role": "assistant", "content": initial_content, "db_key": target_db_key}
+            base_assistant_message = {"role": "assistant", "content": initial_content, "db_key": target_db_key, "table_names": selected_tables}
             logger.info(f"Base assistant message: {base_assistant_message['content'][:100]}...")
 
             sql_results_df = None
@@ -1625,7 +1604,6 @@ User Request: {user_message}'''
                         if visualization_result.additional_params:
                             streamlit_chart.update(visualization_result.additional_params)
                         
-                        base_assistant_message["streamlit_chart"] = streamlit_chart
                         logger.info(f"Created visualization: {visualization_result.chart_type} chart with x={visualization_result.x_column}, y={visualization_result.y_column}")
                         
                         # Add the visualization description to the message
@@ -2279,7 +2257,59 @@ def main():
         </div>
     </div>
     """, unsafe_allow_html=True)
-    st.info('Query data from the World Bank Group datasets publicly available at https://financesone.worldbank.org/.', icon="ℹ️") # Use streamlit icon
+    
+    # Load metadata for the expander
+    db_metadata = load_db_metadata()
+    
+    # Create the main "Available Datasets" expander
+    with st.expander("Available Datasets"):
+        st.write("Query data from the World Bank Group datasets publicly available at https://financesone.worldbank.org/.")
+        
+        if db_metadata:
+            # Create tabs for each database
+            db_tabs = st.tabs([db_key.upper() for db_key in db_metadata.get('databases', {})])
+            
+            # Populate each database tab
+            for i, (db_key, db_info) in enumerate(db_metadata.get('databases', {}).items()):
+                with db_tabs[i]:
+                    # Database path info
+                    st.caption(f"Database path: {db_info.get('database_path', 'N/A')}")
+                    
+                    # Create tabs for each table
+                    table_names = list(db_info.get('tables', {}).keys())
+                    if table_names:
+                        table_tabs = st.tabs([f"📋 {table_name}" for table_name in table_names])
+                        
+                        # Populate each table tab
+                        for j, (table_name, table_info) in enumerate(db_info.get('tables', {}).items()):
+                            with table_tabs[j]:
+                                # Table description
+                                st.write(table_info.get('description', 'No description available'))
+                                
+                                # Display columns in a formatted way
+                                st.markdown("**Columns:**")
+                                
+                                # Create a DataFrame to display the columns in a table format
+                                columns_data = []
+                                for col_name, col_info in table_info.get('columns', {}).items():
+                                    # Skip query_notes and example fields as requested
+                                    col_type = col_info.get('type', 'Unknown type')
+                                    col_desc = col_info.get('description', 'No description available')
+                                    columns_data.append({
+                                        "Column Name": col_name,
+                                        "Type": col_type,
+                                        "Description": col_desc
+                                    })
+                                
+                                if columns_data:
+                                    st.dataframe(pd.DataFrame(columns_data), use_container_width=True)
+                                else:
+                                    st.write("No column information available")
+                    else:
+                        st.write("No tables available for this database")
+        else:
+            st.error("Could not load database metadata")
+    
     # --- Example Queries ---
     st.markdown("""
     <div class="example-queries">
@@ -2303,6 +2333,12 @@ def main():
         st.session_state.agent_message_history = []
         st.session_state.last_chartable_data = None
         st.session_state.last_chartable_db_key = None
+        # Clear SQL query modification context
+        st.session_state.last_sql_query = None
+        st.session_state.last_pruned_schema = None
+        st.session_state.last_target_db_key = None
+        st.session_state.last_target_db_path = None
+        st.session_state.last_table_names = None
         # Clear LangChain memory as well
         if 'lc_memory' in st.session_state:
              st.session_state.lc_memory.clear()
@@ -2347,18 +2383,18 @@ def main():
             with st.chat_message(role):
                 # Display database badge if present
                 db_key = message.get("db_key")
+                table_names = message.get("table_names")
                 if db_key and role == "assistant":
-                    # Map database keys to colors and icons
-                    db_settings = {
-                        "ifc": {"color": "blue", "icon": ":material/business:"},
-                        "miga": {"color": "green", "icon": ":material/shield:"},
-                        "ibrd": {"color": "violet", "icon": ":material/account_balance:"},
-                        "ida": {"color": "violet", "icon": ":material/account_balance:"},
-                        "unknown": {"color": "gray", "icon": ":material/database:"}
-                    }
-                    # Get appropriate settings or default
-                    settings = db_settings.get(db_key.lower(), {"color": "blue", "icon": ":material/database:"})
-                    st.badge(db_key, color=settings["color"], icon=settings["icon"])
+                    # Use badge markdown to show both badges in one line
+                    if table_names:
+                        if isinstance(table_names, list):
+                            table_label = ", ".join(table_names)
+                        else:
+                            table_label = str(table_names)
+                        badge_line = f":violet-badge[:material/database: {db_key}] :orange-badge[:material/table_chart: {table_label}]"
+                    else:
+                        badge_line = f":violet-badge[:material/database: {db_key}]"
+                    st.markdown(badge_line)
                 
                 st.markdown(content) # Display main text content
 
@@ -2410,23 +2446,25 @@ def main():
                         # Ensure df is a pandas DataFrame and has the required columns
                         if isinstance(df, pd.DataFrame) and not df.empty:
                             if x_col and x_col in df.columns and y_col and y_col in df.columns:
-                                # Prepare dataframe for plotting (set index)
-                                plot_df = df.set_index(x_col)
-
-                                # Select only the y_col for basic charts
-                                if color_col and color_col in plot_df.columns:
-                                     # If color is specified, keep it for potential use (e.g., scatter)
-                                     # For bar/line, Streamlit often handles color based on columns selected
-                                     plot_data = plot_df[[y_col, color_col]]
-                                else:
-                                     plot_data = plot_df[[y_col]] # Select only y_col
+                                # --- MODIFIED LOGIC ---
+                                # For bar, line, area charts, pass df directly with x and y specified
+                                # Ensure y_col is numeric for these charts if possible
+                                try:
+                                    df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
+                                    # Optionally drop rows where y_col became NaN after conversion
+                                    # df.dropna(subset=[y_col], inplace=True)
+                                except Exception as e:
+                                     logger.warning(f"Could not convert y-column '{y_col}' to numeric for chart: {e}")
 
                                 if chart_type == "bar":
-                                    st.bar_chart(plot_data)
+                                    # Pass df directly, specify x and y. Color is trickier for st.bar_chart.
+                                    st.bar_chart(df.set_index(x_col)[y_col]) # Use index for categories, select y
                                 elif chart_type == "line":
-                                    st.line_chart(plot_data)
+                                     # Pass df directly, specify x and y. Color is trickier for st.line_chart.
+                                     st.line_chart(df.set_index(x_col)[y_col]) # Use index for categories, select y
                                 elif chart_type == "area":
-                                    st.area_chart(plot_data)
+                                     # Pass df directly, specify x and y. Color is trickier for st.area_chart.
+                                     st.area_chart(df.set_index(x_col)[y_col]) # Use index for categories, select y
                                 elif chart_type == "scatter":
                                     # Use original df and specify x, y, color for scatter
                                     st.scatter_chart(df, x=x_col, y=y_col, color=color_col)
@@ -2461,7 +2499,7 @@ def main():
                         st.error(f"Error displaying visualization: {str(e)}")
                         logger.exception(f"Error rendering chart: {e}")
 
-                # --- REMOVE OR COMMENT OUT the legacy/duplicate "chart" block --- 
+                # --- REMOVE OR COMMENT OUT the legacy/duplicate "chart" block ---
                 # # Display charts using the "chart" key format from handle_follow_up_chart
                 # if "chart" in message and isinstance(message["chart"], dict):
                 #    st.markdown("**Visualization:**")
@@ -3183,6 +3221,8 @@ async def run_sql_modification(
     logger.info(f"Running SQL modification for DB: {last_target_db_key}, Path: {last_target_db_path}")
     deps = None
     final_assistant_message_dict = None
+    # Retrieve selected_tables from session state for modification context
+    selected_tables = st.session_state.get("last_table_names", [])
 
     try:
         logger.info("Instantiating LLM/Agent for SQL modification...")
@@ -3266,7 +3306,7 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
             response: QueryResponse = agent_run_result.output
             logger.info("Modification agent response has expected QueryResponse structure.")
             # Start building the final message dict
-            base_assistant_message = {"role": "assistant", "content": response.text_message, "db_key": last_target_db_key}
+            base_assistant_message = {"role": "assistant", "content": response.text_message, "db_key": last_target_db_key, "table_names": selected_tables}
             sql_results_df = None
             sql_info = {}
             new_sql_query = None # Store the newly generated query
