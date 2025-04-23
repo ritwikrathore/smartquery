@@ -278,100 +278,124 @@
                     "columns": {
                         "date_disclosed": {
                             "type": "TIMESTAMP",
-                            "description": "Date when the record was first disclosed."
+                            "description": "Date when the record was first disclosed.",
+                            "example": "2023-08-09 00:00:00"
                         },
                         "project_name": {
                             "type": "TEXT",
-                            "description": "Name of an investment project - discrete unit of work associated with provision of financial product to a client."
+                            "description": "Name of an investment project - discrete unit of work associated with provision of financial product to a client.",
+                            "example": "DCM BPI"
                         },
                         "document_type": {
                             "type": "TEXT",
-                            "description": "Type of document."
+                            "description": "Type of document.",
+                            "example": "Summary of Investment Information (AIP Policy 2012)"
                         },
                         "project_number": {
                             "type": "INTEGER",
-                            "description": "Numeric code that uniquely identifies a project."
+                            "description": "Numeric code that uniquely identifies a project.",
+                            "example": "47671"
                         },
                         "project_url": {
                             "type": "TEXT",
-                            "description": "URL to the project page."
+                            "description": "URL to the project page.",
+                            "example": "https://disclosures.ifc.org/project-detail/SII/47671/dcm-bpi"
                         },
                         "product_line": {
                             "type": "TEXT",
-                            "description": "Identifies IFC Financial Product. This is the highest level of classification to be applied to IFC product. Each IFC product must be assigned one and only one product type."
+                            "description": "Identifies IFC Financial Product. This is the highest level of classification to be applied to IFC product. Each IFC product must be assigned one and only one product type.",
+                            "example": "Loan"
                         },
                         "company_name": {
                             "type": "TEXT",
-                            "description": "Name of the company."
+                            "description": "Name of the company.",
+                            "example": "BANK OF THE PHILIPPINE ISLANDS"
                         },
                         "country": {
                             "type": "TEXT",
-                            "description": "Country where investment and/or advisory services are executed and/or utilized."
+                            "description": "Country where investment and/or advisory services are executed and/or utilized.",
+                            "example": "Philippines"
                         },
                         "ifc_country_code": {
                             "type": "TEXT",
-                            "description": "Country code according to IFC Code list."
+                            "description": "Country code according to IFC Code list.",
+                            "example": "PHL"
                         },
                         "industry": {
                             "type": "TEXT",
-                            "description": "Name that follows the North American Industry Classification System (NAICS) schema identifying a distinct economic segment, and is the lowest classification level."
+                            "description": "Name that follows the North American Industry Classification System (NAICS) schema identifying a distinct economic segment, and is the lowest classification level.",
+                            "example": "Financial Institutions"
                         },
                         "environmental_category": {
                             "type": "TEXT",
-                            "description": "Code indicating nature and extent of environmental and social assessment needed fro investment project as defined in IFC's Policy on Environmental and Social Sustainability."
+                            "description": "Code indicating nature and extent of environmental and social assessment needed fro investment project as defined in IFC's Policy on Environmental and Social Sustainability.",
+                            "example": "FI-2"
                         },
                         "department": {
                             "type": "TEXT",
-                            "description": "World Bank Group organizational entity within a Vice Presidency, comprised of one or more units and/or divisions."
+                            "description": "World Bank Group organizational entity within a Vice Presidency, comprised of one or more units and/or divisions.",
+                            "example": "CF4S4 - Regional Industry - FIG Asia & Pac/FIG Inv Ops East Asia & Pacific"
                         },
                         "status": {
                             "type": "TEXT",
-                            "description": "Identifies standing/status of a project."
+                            "description": "Identifies standing/status of a project.",
+                            "example": "Active"
                         },
                         "projected_board_date": {
                             "type": "TIMESTAMP",
-                            "description": "Summary of Project Information is prepared and distributed to the public in advance of the IFC Board of Directors’ consideration of the proposed transaction. Board dates are estimates only."
+                            "description": "Summary of Project Information is prepared and distributed to the public in advance of the IFC Board of Directors’ consideration of the proposed transaction. Board dates are estimates only.",
+                            "example": "2024-01-01 00:00:00"
                         },
                         "ifc_approval_date": {
                             "type": "TIMESTAMP",
-                            "description": "Date when the project was approved by IFC."
+                            "description": "Date when the project was approved by IFC.",
+                            "example": "2024-01-01 00:00:00"
                         },
                         "ifc_signed_date": {
                             "type": "TIMESTAMP",
-                            "description": "Date when the project was signed by IFC."
+                            "description": "Date when the project was signed by IFC.",
+                            "example": "2024-01-01 00:00:00"
                         },
                         "ifc_invested_date": {
                             "type": "TIMESTAMP",
-                            "description": "Date when the project was invested by IFC."
+                            "description": "Date when the project was invested by IFC.",
+                            "example": "2024-01-01 00:00:00"
                         },
                         "ifc_investment_for_risk_management_million_usd": {
                             "type": "REAL",
-                            "description": "Risk Management - product designed to hedge the financial risk of IFC client(s) using derivative products."
+                            "description": "Risk Management - product designed to hedge the financial risk of IFC client(s) using derivative products.",
+                            "example": "250"
                         },
                         "ifc_investment_for_guarantee_million_usd": {
                             "type": "REAL",
-                            "description": "Guarantee - promise from one entity to assume responsibility for the payment of a financial obligation of another entity if such other entity fails to perform. A guarantee is a contingent liability of the guarantor."
+                            "description": "Guarantee - promise from one entity to assume responsibility for the payment of a financial obligation of another entity if such other entity fails to perform. A guarantee is a contingent liability of the guarantor.",
+                            "example": "250"
                         },
                         "ifc_investment_for_loan_million_usd": {
                             "type": "REAL",
-                            "description": "Loans - money advances to a client, to be repaid at a later date, usually with interest and/or fees."
+                            "description": "Loans - money advances to a client, to be repaid at a later date, usually with interest and/or fees.",
+                            "example": "250"
                         },
                         "ifc_investment_for_equity_million_usd": {
                             "type": "REAL",
-                            "description": "Equity - Ownership interest in a corporation or enterprise that represents a claim on the assets of the entity in proportion to the number and class of shares owned."
+                            "description": "Equity - Ownership interest in a corporation or enterprise that represents a claim on the assets of the entity in proportion to the number and class of shares owned.",
+                            "example": "250"
                         },
                         "total_ifc_investment_as_approved_by_board_million_usd": {
                             "type": "REAL",
                             "description": "Sum of project's financial product(s) prior to approval and approved.",
-                            "query_notes": "Use this as your primary amount column for SQL query when querying IFC investments, unless the user asks for a different amount column. Include this column in your SQL query when querying IFC investments, unless you are including some other amount column as per the user query."
+                            "query_notes": "Use this as your primary amount column for SQL query when querying IFC investments, unless the user asks for a different amount column. Include this column in your SQL query when querying IFC investments, unless you are including some other amount column as per the user query.",
+                            "example": "250"
                         },
                         "wb_country_code": {
                             "type": "TEXT",
-                            "description": "Country code according to WBG Code list. Might be different from ISO codes."
+                            "description": "Country code according to WBG Code list. Might be different from ISO codes.",
+                            "example": "PH"
                         },
                         "as_of_date": {
                             "type": "TIMESTAMP",
-                            "description": "Date when this snapshot was taken."
+                            "description": "Date when this snapshot was taken.",
+                            "example": "2024-01-01 00:00:00"
                         }
                     }
                 },

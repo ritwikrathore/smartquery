@@ -272,6 +272,9 @@ conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_guar
 #20, 'ifc_investment_for_equitymillion_-_usd'
 conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'ifc_investment_for_equitymillion_-_usd' TO 'ifc_investment_for_equity_million_usd'")
 
+#21, 'total_ifc_investment_as_approved_by_boardmillion_-_usd'
+conn.execute("ALTER TABLE ifc_investments RENAME COLUMN 'total_ifc_investment_as_approved_by_boardmillion_-_usd' TO 'total_ifc_investment_as_approved_by_board_million_usd'")
+
 # ifc_advisory
 ifc_advisory_columns = conn.execute("PRAGMA table_info(ifc_advisory)").fetchall()
 print(ifc_advisory_columns)

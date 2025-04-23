@@ -181,45 +181,43 @@ class OrchestratorResult(BaseModel):
     )
     response: str = Field(..., description="Assistant's response to the user.")
     chart_type: Optional[str] = Field(None, description="Type of chart requested (for visualization actions only).")
+    is_modification: bool = Field(False, description="True if the user query is a modification/refinement of the previous query context, False if it is a new query.")
 
 def create_orchestrator_agent_blueprint():
     return {
         "output_type": OrchestratorResult, # Changed result_type to output_type
         "name": "Orchestrator Agent",
         "output_retries": 2, # Changed retries to output_retries
-        "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to:
+        "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to determine the user's intent and route the request appropriately. Analyze the user query and the recent conversation history, paying close attention to the provided "Previous Query Context" (SQL, Schema Used, Result Summary).
 
-1. ASSISTANT MODE:
-   - If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
-   - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IBRD and IDA lending data, IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
-   - If the user asks about the dataset, tables, columns, or wants to know what data is available, you have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use this tool to answer questions about the structure, available columns, or descriptions.
-   - If the user asks for clarification about the last response, help them as long as it is related to the World Bank database systems or the outputs of the previous database query.
+**CRITICAL ANALYSIS: New Query vs. Modification**
+Before deciding the action, critically evaluate if the new user query is a modification/refinement of the *immediately preceding* database query context or a completely new request. Use all parts of the "Previous Query Context" to inform your decision.
+- **Modification Criteria:** The query asks to change, refine, filter, add/remove columns, or aggregate differently based on the data structure potentially available according to the *Previous Query Context* (even if columns were pruned). Examples: "add the 'amount' column", "also show the project ID", "filter where country is 'X'", "what's the total for these results?", "sort by date". **These ARE modifications.**
+- **New Query Criteria:** The query asks about different data concepts, different primary entities (countries, sectors, products *if different from previous*), significantly different timeframes, mentions a different database group (IBRD vs IFC vs MIGA vs IDA *if different from previous*), or has a fundamentally different goal. Example: "Now show me IBRD loans to India" after a query about "IDA projects in St. Lucia". **These are NEW queries.**
+- **Default:** If unsure after careful analysis, default to treating it as a new query (`is_modification=False`).
 
-2. DATABASE QUERY MODE:
-   - ONLY set action='database_query' if the user wants to query the database, where SQL is the appropriate response.
-   - DO NOT set action='database_query' if the user is asking for clarification about the last response or the previous database query or for a follow-up chart or visualization.
-   - Provide a brief helpful response acknowledging the query, such as "I'll search the database for that information" or "Let me find that data for you."
+**ACTIONS:**
 
-3. VISUALIZATION MODE:
-   - Set action='visualization' when the user is requesting to visualize or chart previously retrieved data.
-   - you need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
-   - When setting action='visualization', include the chart_type (e.g., "bar", "line", "pie", "scatter") in your response.
-   - Provide a brief helpful response acknowledging the visualization request, such as "I'll create a bar chart with the data."
+1. ASSISTANT MODE (`action='assistant'`, `is_modification=False`):
+   - If the user message is a greeting, general question about capabilities, unrelated topic, or asks for clarification about the *meaning* of previous results (without requesting data changes).
+   - Use the `get_metadata_info` tool to answer questions about database structure, available tables/columns etc.
+   - Respond helpfully.
 
-4. PYTHON AGENT USAGE:
-   - You have access to a Python agent tool for data manipulation and visualization (e.g., using pandas, numpy, or plotting the last DataFrame as a chart).
-   - You need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
-   - Use this tool when the user makes a follow-up request to visualize, plot, or chart the previous results, or requests data manipulation in Python.
-   - Call the Python agent with the requested operation and any relevant user context.
-   - If the tool returns a successful result, respond to the user with the message and chart type or code from the tool's output. If there is an error, inform the user accordingly.
-   - Only use this tool if there is previous data available to manipulate or visualize.
-   - IF you determine a query to be a follow-up chart or visualization, set action='visualization' and include the chart type in the response.
+2. DATABASE QUERY MODE (`action='database_query'`):
+   - Set this action if the user wants to retrieve data from the database (either a new query or a modification).
+   - **Set `is_modification=True` ONLY if you confidently determined it meets the Modification Criteria above.**
+   - **Set `is_modification=False` if it meets the New Query Criteria or if you are unsure.**
+   - Provide a brief response acknowledging the request (e.g., "Okay, I'll run that query," or "Okay, I'll modify the previous query").
 
-5. CONVERSATION MANAGEMENT:
-   - Use the conversation history to maintain context.
-   - If a follow-up question refers to previous results, treat it as a database query, Python data manipulation, or visualization request or clarification about the last response.
+3. VISUALIZATION MODE (`action='visualization'`, `is_modification=False`):
+   - Set this action ONLY when the user explicitly asks to visualize, plot, or chart the *results of the immediately preceding query*.
+   - Compare the user query to the previous dataframe/query context. Only proceed if the request clearly refers to visualizing the existing data.
+   - If the visualization request requires different data than the previous query, set `action='database_query'` and `is_modification=False`.
+   - Include the `chart_type` (e.g., "bar", "line") if identifiable.
+   - Provide a brief response (e.g., "Okay, creating a chart...").
 
-Respond ONLY with the structured OrchestratorResult, including the appropriate action type and chart_type if relevant.'''
+Respond ONLY with the structured OrchestratorResult, including the `is_modification` field.''',
+        "tools": [get_metadata_info],
     }
 
 
@@ -239,7 +237,7 @@ You MUST return your response as a valid QueryResponse object with these fields:
 2. **VERY IMPORTANT: sql_result: You MUST always include SQL query in this field. never return sql_result=None.**
 
 --- MODIFICATION REQUESTS ---
-If the prompt includes a `Previous SQL Query` and a `User Modification` instruction:
+If the prompt includes a `Previous SQL Query` that is relevant to the user's prompt and a `User Modification` instruction:
 1. **Analyze the `Previous SQL Query`**. 
 2. **Analyze the `User Modification`** (e.g., "add column X", "also show Y", "remove Z", "visualize X over time").
 3. **Use the provided `Schema`** to understand the available tables and columns.
@@ -251,9 +249,11 @@ If the prompt includes a `Previous SQL Query` and a `User Modification` instruct
     - You MUST explicitly suggest the chart type (e.g., "line chart", "bar chart") in the `text_message`.
 7. **Explain** the changes made in the `text_message`.
 8. Return the *new* query in the `sql_result` field and any *preparation-only* Python code in `python_result`.
+9. **ALWAYS USE DATABASE QUERY MODE** when the user's prompt relates to a different table or database than the previous query, do not modify the previous query.
 
 --- NEW QUERY REQUESTS ---
-If no `Previous SQL Query` is provided, treat it as a new request and follow the rules below.
+If the user's prompt relates to a different table or database than the previous query, use database query mode and generate a new SQL query.
+If `Previous SQL Query` is unrelevant to the user's prompt, treat it as a new request and follow the rules below.
 
 CRITICAL RULES FOR SQL GENERATION:
 1. For ANY question about data in the database (counts, totals, listings, comparisons, etc.), you MUST generate an appropriate SQLite query.
@@ -262,7 +262,7 @@ CRITICAL RULES FOR SQL GENERATION:
 4. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
 5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
 6. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
-7. INCLUDE AT LEAST 3 COLUMNS: Include columns that would be needed to make sense of the query like project name and number. never give only one column in the SELECT query, **always include at least 3 columns**.
+7. INCLUDE AT LEAST 4 COLUMNS: Include columns that would be needed to make sense of the query like project name and number and amounts. Never give only one column in the SELECT query, **always include at least 4 columns**.
 8. QUERY NOTES: *IMPORTANT* Pay attention to the query_notes in the metadata for each column. These are important instructions from the data stewards that you must follow. Use them to determine the correct column to use for the query.
 
 PYTHON AGENT TOOL:
@@ -398,29 +398,8 @@ async def validate_query_result(ctx: RunContext[AgentDependencies], result: Quer
                 raise ModelRetry(f"An unexpected error occurred during SQL validation: {str(e)}. Please try generating the SQL query again.") from e
 
     # --- Check for Missing SQL when Expected ---
-    # (Keep the logic for checking keywords vs. actual SQL presence as is)
-    data_query_keywords = ['total', 'sum', 'average', 'count', 'list', 'show', 'per', 'group', 'compare', 'what is', 'how many', 'which', 'top', 'approved', 'loan', 'loans', 'amount', 'india']
-    user_question_marker = "User Request:"
-    user_question_index = user_message.find(user_question_marker)
-    original_user_question = user_message[user_question_index + len(user_question_marker):].strip() if user_question_index != -1 else user_message
-
-    if not result.sql_result and any(keyword in original_user_question.lower() for keyword in data_query_keywords):
-        is_greeting = any(greet in original_user_question.lower()[:15] for greet in ['hello', 'hi ', 'thanks', 'thank you'])
-        is_meta_query = any(kw in original_user_question.lower() for kw in ['explain what is', 'how does', 'tell me more about', 'can you describe'])
-        ai_gave_error_reason = "invalid request" in result.text_message.lower() or "cannot process" in result.text_message.lower()
-
-        # Additional check for common database query patterns
-        is_database_query = (
-            ('ibrd' in original_user_question.lower() and ('loan' in original_user_question.lower() or 'india' in original_user_question.lower())) or
-            ('show me' in original_user_question.lower()) or
-            ('sum of' in original_user_question.lower()) or
-            ('total' in original_user_question.lower() and ('amount' in original_user_question.lower() or 'loan' in original_user_question.lower()))
-        )
-
-        if (not is_greeting and not is_meta_query and not ai_gave_error_reason) or is_database_query:
-            logger.warning(f"SQL result is missing, but keywords suggest it might be needed for query: {original_user_question[:100]}...")
-            logger.warning(f"Raising ModelRetry due to Missing SQL. Response: text='{result.text_message[:50]}...', sql=None")
-            raise ModelRetry("The user's question seems to require data retrieval (based on keywords like 'compare', 'average', 'top', 'total', 'list', or specific database entities like 'IBRD', 'loans', 'India'), but no SQL query was generated. Please generate the appropriate SQL query.")
+    # (Removed data_query_keywords and related keyword-based fallback logic)
+    # The orchestrator/agents are now responsible for determining query type and SQL generation.
 
 
     # --- Visualization Validation ---
@@ -511,37 +490,62 @@ from typing import Optional, Dict, Any
 class MetadataInfoRequest(BaseModel):
     db_key: Optional[str] = Field(None, description="Database key to filter (e.g., 'ifc', 'miga', 'ibrd')")
     table: Optional[str] = Field(None, description="Table name to filter (optional)")
-    column: Optional[str] = Field(None, description="Column name to filter (optional)")
+    tables: Optional[List[str]] = Field(None, description="List of table names to filter (optional, used with db_key)") # New field
+    column: Optional[str] = Field(None, description="Column name to filter (optional, requires table)")
 
 class MetadataInfoResult(BaseModel):
     info: Any = Field(..., description="The requested metadata information (database, table, or column descriptions, etc.)")
     message: str = Field(..., description="Human-readable summary of what was returned.")
 
 async def get_metadata_info(ctx: RunContext, request: MetadataInfoRequest) -> MetadataInfoResult:
-    """Tool: Retrieve metadata information about the dataset, tables, or columns. Optionally filter by db_key, table, or column."""
+    """Tool: Retrieve metadata information about the dataset, tables, or columns. Optionally filter by db_key, table, list of tables, or column."""
     metadata = load_db_metadata()
     if not metadata:
         return MetadataInfoResult(info=None, message="No metadata available.")
+
     db_key = request.db_key
     table = request.table
+    tables_list = request.tables # New variable
     column = request.column
+
     # Drill down as requested
     if db_key:
         dbs = metadata.get('databases', {})
         db = dbs.get(db_key)
         if not db:
             return MetadataInfoResult(info=None, message=f"Database key '{db_key}' not found.")
+
+        # --- NEW: Handle filtering by a list of tables ---
+        if tables_list:
+            # Filter the tables within the specific database entry
+            all_db_tables = db.get('tables', {})
+            filtered_tables = {t_name: t_info for t_name, t_info in all_db_tables.items() if t_name in tables_list}
+            if not filtered_tables:
+                 return MetadataInfoResult(info=None, message=f"None of the requested tables {tables_list} found in database '{db_key}'.")
+            # Return a copy of the db entry with only the filtered tables
+            filtered_db_info = db.copy()
+            filtered_db_info['tables'] = filtered_tables
+            return MetadataInfoResult(info=filtered_db_info, message=f"Metadata for tables {list(filtered_tables.keys())} in database '{db_key}'.")
+        # --- End new section ---
+
+        # --- Existing logic for single table/column ---
         if table:
             tbl = db.get('tables', {}).get(table)
             if not tbl:
                 return MetadataInfoResult(info=None, message=f"Table '{table}' not found in database '{db_key}'.")
             if column:
+                # Ensure column requires table
                 col = tbl.get('columns', {}).get(column)
                 if not col:
                     return MetadataInfoResult(info=None, message=f"Column '{column}' not found in table '{table}' of database '{db_key}'.")
                 return MetadataInfoResult(info=col, message=f"Description for column '{column}' in table '{table}' of database '{db_key}'.")
+            # If only table is requested (and not tables_list)
             return MetadataInfoResult(info=tbl, message=f"Description for table '{table}' in database '{db_key}'.")
+
+        # If only db_key is requested (and not tables_list or table)
         return MetadataInfoResult(info=db, message=f"Description for database '{db_key}'.")
+
+    # If no db_key provided, return full metadata
     return MetadataInfoResult(info=metadata, message="Full metadata returned.")
 
 def format_schema_for_selected_tables(metadata: Dict, db_key: str, selected_table_names: List[str]) -> str:
@@ -741,41 +745,159 @@ def get_recent_turns_from_memory(memory, n=2):
 
 # --- Orchestrator Agent Routing ---
 async def handle_user_message(message: str) -> None:
-    """Handles user message, routes via orchestrator, then runs DB/Table selection."""
+    """Handles user message, routes via orchestrator, then runs DB/Table selection or modification."""
     start_time = time.time()
     logger.info(f"handle_user_message started for message: '{message[:50]}...'")
     
-    # Add user message to history for context
-    # st.session_state.chat_history.append({"role": "user", "content": message})  # <-- REMOVE THIS LINE
+    # --- Proceed with standard chart/orchestrator/DB flow ---
+    logger.info("Proceeding with standard orchestrator/DB flow...")
 
-    # --- Check for Follow-up Modification Request FIRST ---
-    is_modification_request = False
-    modification_keywords = ["add", "also show", "include", "remove", "change", "modify", "instead of", "what about", "how about", "can you", "what if"]
-    # Check if there's a previous SQL query context
-    if 'last_sql_query' in st.session_state and st.session_state.last_sql_query:
-        # Simple check: message is short and contains modification keywords
-        if len(message.split()) < 20 and any(keyword in message.lower() for keyword in modification_keywords):
-            # More refined check: ensure it's not just a greeting or unrelated question
-            if not any(greet in message.lower()[:15] for greet in ['hello', 'hi ', 'thanks', 'thank you', 'great']): 
-                is_modification_request = True
-                logger.info(f"Detected potential SQL modification request: '{message[:50]}...'")
+    # --- Orchestrator Agent Routing ---
+    orchestrator_action = None
+    orchestrator_is_modification = False
+    orchestrator_response_text = None
+    orchestrator_chart_type = None
 
-    if is_modification_request:
-        try:
-            # Retrieve necessary context
-            last_sql = st.session_state.last_sql_query
-            last_schema = st.session_state.last_pruned_schema
-            # Try getting db_key from chartable context first, then fall back
-            last_db_key = st.session_state.get('last_chartable_db_key', st.session_state.get('last_db_key')) 
-            last_db_path = st.session_state.get('last_target_db_path') # Get DB path
-
-            if not all([last_sql, last_schema, last_db_key, last_db_path]):
-                logger.warning("Missing context for SQL modification (Query: %s, Schema: %s, Key: %s, Path: %s), proceeding as new query.", 
-                                 bool(last_sql), bool(last_schema), last_db_key, last_db_path)
-                # Proceed as if it's not a modification request
+    try:
+        # Add user message to display history FIRST (moved from main)
+        if not st.session_state.chat_history or st.session_state.chat_history[-1].get("content") != message or st.session_state.chat_history[-1].get("role") != "user":
+            st.session_state.chat_history.append({"role": "user", "content": message})
+            user_msg_validated = validate_message_entry({"role": "user", "content": message})
+            if user_msg_validated:
+                st.session_state.agent_message_history.append(user_msg_validated)
             else:
-                with st.spinner("Modifying previous query..."):
-                    logger.info("Calling run_async_task for run_sql_modification...")
+                logger.warning("Failed to validate user message for agent_message_history")
+        else:
+            logger.info("Skipping duplicate user message append to chat history.")
+
+        short_context = get_recent_turns_from_memory(st.session_state.lc_memory, n=3)
+        global google_api_key
+        import google.generativeai as genai
+        try:
+            genai.configure(api_key=google_api_key)
+        except Exception as config_err:
+            logger.error(f"Failed to configure GenAI SDK for orchestrator: {config_err}", exc_info=True)
+            raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
+
+        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-1.5-flash")
+        local_llm = GeminiModel(model_name=gemini_model_name)
+        
+        # Get the config directly from the blueprint function
+        orchestrator_config = create_orchestrator_agent_blueprint() 
+        
+        # Remove the temporary class definition and prompt update here
+        # orchestrator_config["output_type"] = OrchestratorResultWithMod 
+        # orchestrator_config["system_prompt"] = '''...''' 
+
+        # Instantiate the agent using the configuration dictionary
+        # The 'tools' are already defined in orchestrator_config
+        orchestrator_agent = Agent(local_llm, **orchestrator_config) 
+        
+        # REMOVE the redundant tool registration
+        # orchestrator_agent.tool(get_metadata_info) 
+
+        # Prepare context for orchestrator prompt
+        prev_sql = st.session_state.get('last_sql_query')
+        prev_df_summary = ""
+        if 'last_chartable_data' in st.session_state and st.session_state.last_chartable_data is not None:
+            prev_df_summary = summarize_dataframe(st.session_state.last_chartable_data)
+        # ---> Get the schema used for the last query <---
+        prev_schema = st.session_state.get('last_pruned_schema') 
+
+        orchestrator_prompt = f"""Recent conversation:
+{short_context}
+
+Previous Query Context (if relevant):
+SQL: {prev_sql or 'None'}
+Schema Used: {prev_schema or 'None'} # Explicitly include the schema
+Result Summary: {prev_df_summary or 'None'}
+
+Current User Query: {message}
+
+Based ONLY on the user query and the provided context (especially the Previous Query Context), determine the action and if it's a modification of the *immediately preceding* query context. Pay close attention to whether the user is asking to refine the previous SQL/Schema or asking a fundamentally new question."""
+
+        logger.info("Running orchestrator agent...")
+        
+        async def run_orchestrator():
+            return await orchestrator_agent.run(orchestrator_prompt)
+
+        orchestrator_result = run_async_task(run_orchestrator)
+
+        # Check the result type against the main OrchestratorResult class
+        if hasattr(orchestrator_result, 'output') and isinstance(orchestrator_result.output, OrchestratorResult):
+            output_data = orchestrator_result.output
+            orchestrator_action = output_data.action
+            # The 'is_modification' field should now be present in OrchestratorResult
+            orchestrator_is_modification = getattr(output_data, 'is_modification', False) 
+            orchestrator_response_text = getattr(output_data, 'response', None)
+            orchestrator_chart_type = getattr(output_data, 'chart_type', None)
+            logger.info(f"Orchestrator Result: action='{orchestrator_action}', is_modification='{orchestrator_is_modification}', response='{orchestrator_response_text[:50] if orchestrator_response_text else 'None'}...', chart_type='{orchestrator_chart_type}'")
+        else:
+            logger.error(f"Orchestrator returned unexpected result type or structure: {type(orchestrator_result)}. Full result: {orchestrator_result}")
+            # Check if maybe the output has the fields but is not the exact class instance
+            if hasattr(orchestrator_result, 'output') and hasattr(orchestrator_result.output, 'action') and hasattr(orchestrator_result.output, 'is_modification'):
+                logger.warning("Orchestrator output object has expected fields but is not instance of OrchestratorResult. Proceeding cautiously.")
+                output_data = orchestrator_result.output
+                orchestrator_action = output_data.action
+                orchestrator_is_modification = output_data.is_modification
+                orchestrator_response_text = getattr(output_data, 'response', None)
+                orchestrator_chart_type = getattr(output_data, 'chart_type', None)
+                logger.info(f"Recovered Orchestrator Result: action='{orchestrator_action}', is_modification='{orchestrator_is_modification}', response='{orchestrator_response_text[:50] if orchestrator_response_text else 'None'}...', chart_type='{orchestrator_chart_type}'")
+            else:
+                raise RuntimeError("Orchestrator failed to return a valid action or expected structure.")
+
+    except Exception as e:
+        error_content = f"I'm sorry, I encountered an error understanding your request type. Please try rephrasing. Error: {str(e)}"
+        logger.error(f"Error in orchestrator processing: {str(e)}", exc_info=True)
+        st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+        if 'lc_memory' in st.session_state:
+            st.session_state.lc_memory.save_context({"input": message}, {"output": f"Assistant Error: {str(e)}"})
+        logger.info(f"handle_user_message finished (orchestrator error). Duration: {time.time() - start_time:.2f}s")
+        return # Exit on orchestrator error
+
+    # --- Route based on Orchestrator Result ---
+
+    if orchestrator_action == "assistant":
+        logger.info("Orchestrator -> Assistant Action")
+        response = orchestrator_response_text or "How can I help?" # Fallback response
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        if 'lc_memory' in st.session_state:
+            st.session_state.lc_memory.save_context({"input": message}, {"output": response})
+        logger.info(f"handle_user_message finished (assistant). Duration: {time.time() - start_time:.2f}s")
+        return
+
+    elif orchestrator_action == "visualization":
+        logger.info(f"Orchestrator -> Visualization Action (Chart Type: {orchestrator_chart_type})")
+        # Display the orchestrator's acknowledgement message if present
+        if orchestrator_response_text:
+            st.session_state.chat_history.append({"role": "assistant", "content": orchestrator_response_text})
+        chart_type = orchestrator_chart_type or "bar" # Default
+        async def run_follow_up_viz():
+            # Call the standard follow-up chart handler
+            await handle_follow_up_chart(message, chart_type) 
+        run_async_task(run_follow_up_viz)
+        logger.info(f"handle_user_message finished (visualization). Duration: {time.time() - start_time:.2f}s")
+        return
+
+    elif orchestrator_action == "database_query":
+        logger.info(f"Orchestrator -> Database Query Action (Is Modification: {orchestrator_is_modification})")
+        if orchestrator_response_text:
+            if not st.session_state.chat_history or st.session_state.chat_history[-1].get("role") == "user":
+                st.session_state.chat_history.append({"role": "assistant", "content": orchestrator_response_text})
+            else:
+                logger.info("Skipping duplicate orchestrator response text.")
+
+        # --- Modification Path ---
+        if orchestrator_is_modification:
+            logger.info("Orchestrator identified as modification request.")
+            last_sql = st.session_state.get('last_sql_query')
+            last_schema = st.session_state.get('last_pruned_schema')
+            last_db_key = st.session_state.get('last_target_db_key') 
+            last_db_path = st.session_state.get('last_target_db_path')
+
+            if all([last_sql, last_schema, last_db_key, last_db_path]):
+                logger.info("Context found for modification. Calling run_sql_modification.")
+                try:
                     async def run_modification_wrapper():
                         return await run_sql_modification(
                             user_message=message,
@@ -784,226 +906,115 @@ async def handle_user_message(message: str) -> None:
                             last_target_db_key=last_db_key,
                             last_target_db_path=last_db_path
                         )
-                    
                     result_dict = run_async_task(run_modification_wrapper)
-                    
-                    logger.info("run_async_task for run_sql_modification finished.")
-                    # Append result to chat history
                     if result_dict:
                         st.session_state.chat_history.append(result_dict)
-                        # Save context to LangChain memory
                         if 'lc_memory' in st.session_state and 'content' in result_dict:
                             try:
-                                # Append DataFrame summary if available from modification result
                                 output_text = result_dict['content']
-                                df_to_summarize = None
-                                if 'last_chartable_data' in st.session_state and st.session_state.last_chartable_data is not None:
-                                     df_to_summarize = st.session_state.last_chartable_data
+                                df_to_summarize = st.session_state.get('last_chartable_data')
                                 if df_to_summarize is not None and not df_to_summarize.empty:
                                     df_summary = summarize_dataframe(df_to_summarize)
                                     output_text += f"\n\n[DataFrame Summary]\n{df_summary}"
                                 st.session_state.lc_memory.save_context({"input": message}, {"output": output_text})
                             except Exception as mem_err:
                                 logger.error(f"Error saving modification context to LC memory: {mem_err}")
+                        else:
+                            err_msg = "Sorry, something went wrong trying to modify the query."
+                            st.session_state.chat_history.append({"role": "assistant", "content": err_msg, "db_key": last_db_key})
+                            if 'lc_memory' in st.session_state:
+                                st.session_state.lc_memory.save_context({"input": message}, {"output": f"Assistant Error: {err_msg}"})
+                        logger.info(f"handle_user_message finished (modification). Duration: {time.time() - start_time:.2f}s")
+                        return 
                     else:
-                         # Fallback error message if run_sql_modification returned None unexpectedly
-                         st.session_state.chat_history.append({"role": "assistant", "content": "Sorry, something went wrong while modifying the query.", "db_key": last_db_key})
-                
-                # Rerun to display the modification result
-                logger.info("Rerunning Streamlit after SQL modification.")
-                st.rerun()
-                # Exit handle_user_message after handling modification
-                return 
-
-        except Exception as mod_e:
-            logger.error(f"Error during SQL modification handling: {mod_e}", exc_info=True)
-            st.error(f"An error occurred while modifying the query: {str(mod_e)}")
-            # Fall through to treat as a new query if modification fails critically
-            logger.warning("Falling back to standard query flow after modification error.")
-            # Clear potentially inconsistent modification state if needed
-            # (e.g., if run_sql_modification partially set things)
-            # Clear modification context to prevent re-triggering on rerun
-            st.session_state.last_sql_query = None
-            st.session_state.last_pruned_schema = None
-            st.session_state.last_target_db_path = None
-
-    # --- If not a modification OR modification failed/missing context, proceed below ---
-    logger.info("Proceeding with standard chart/orchestrator/DB flow...")
-
-    # Check for visualization-specific keywords for follow-up requests
-    visualization_keywords = [
-        'chart', 'plot', 'graph', 'visualize', 'visualise', 'visualization',
-        'visualisation', 'bar chart', 'pie chart', 'histogram', 'line graph',
-        'scatter plot', 'show me', 'display'
-    ]
-    
-    # Only call handle_follow_up_chart for genuine follow-up requests:
-    # - Short message
-    # - Visualization keywords
-    # - There is actually previous data to visualize
-    is_short_message = len(message.split()) < 15
-    last_is_assistant = (len(st.session_state.chat_history) > 1 and 
-                         st.session_state.chat_history[-2].get("role") == "assistant")
-    is_follow_up_chart_request = (
-        is_short_message and
-        last_is_assistant and
-        any(keyword in message.lower() for keyword in visualization_keywords) and
-        'last_chartable_data' in st.session_state and st.session_state.last_chartable_data is not None
-    )
-
-    # Shortcut for obvious visualization requests to bypass the classifier
-    if is_follow_up_chart_request:
-        logger.info("Detected follow-up visualization request directly")
-        chart_type = "bar"  # Default
-        for chart_keyword in ['bar', 'pie', 'line', 'scatter', 'histogram']:
-            if chart_keyword in message.lower():
-                chart_type = chart_keyword
-                break
-        await handle_follow_up_chart(message, chart_type)
-        return
-
-    # --- Orchestrator Agent Routing ---
-    try:
-        # Pass the last few user/assistant turns as context for better decision-making
-        short_context = get_recent_turns_from_memory(st.session_state.lc_memory, n=3)  # Increase context to 3 turns
-        global google_api_key
-        import google.generativeai as genai
-        try:
-            genai.configure(api_key=google_api_key)
-            logger.info("Configured GenAI SDK for orchestrator.")
-        except Exception as config_err:
-            logger.error(f"Failed to configure GenAI SDK for orchestrator: {config_err}", exc_info=True)
-            raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
-
-        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.5-flash-preview-04-17")
-        local_llm = GeminiModel(model_name=gemini_model_name)
-        orchestrator_config = create_orchestrator_agent_blueprint()
-        orchestrator_agent = Agent(local_llm, **orchestrator_config)
-        # Register the Python agent tool function for the orchestrator
-        orchestrator_agent.tool(call_python_agent)
-        orchestrator_prompt = f"""Recent conversation:
-{short_context}
-
-User: {message}"""
-        logger.info("Running orchestrator agent...")
-        
-        # Use run_async_task instead of directly awaiting to handle event loop issues
-        async def run_orchestrator():
-            return await orchestrator_agent.run(orchestrator_prompt)
-        
-        orchestrator_result = run_async_task(run_orchestrator)
-        
-        if hasattr(orchestrator_result, 'output'):
-            # --- Modern LLM Orchestration: Combined SQL + Visualization Intent ---
-            # Detect if the user query requests both data and visualization in one step
-            if orchestrator_result.output.action == "visualization":
-                logger.info("Orchestrator determined this is a visualization request")
-                chart_type = orchestrator_result.output.chart_type or "bar"  # Default to bar if not specified
-
-                # NEW: Check if the user query also contains data retrieval keywords (combined intent)
-                data_query_keywords = [
-                    'total', 'sum', 'average', 'count', 'list', 'show', 'per', 'group', 'compare', 'what is', 'how many', 'which', 'top', 'biggest', 'largest', 'most', 'least', 'highest', 'lowest', 'by', 'rank', 'distribution', 'breakdown'
-                ]
-                is_combined_intent = any(kw in message.lower() for kw in data_query_keywords)
-
-                if is_combined_intent:
-                    logger.info("Detected combined SQL + visualization intent. Running SQL and visualization in one workflow.")
-                    # Run the full DB flow: DB selection, table selection, SQL, then visualization
-                    # Set a flag in session state to indicate visualization is expected after SQL
-                    st.session_state.combined_sql_visualization = {
-                        'chart_type': chart_type,
-                        'user_message': message
-                    }
-                    # Continue with the existing DB flow (will trigger visualization after SQL)
-                    # (Do NOT return here)
-                else:
-                    # If not combined, handle as a follow-up visualization (requires previous data)
-                    await handle_follow_up_chart(message, chart_type)
+                        error_content = "An error occurred while modifying the query: No result returned."
+                        logger.error("No result returned from run_sql_modification.")
+                        st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+                        if 'lc_memory' in st.session_state:
+                            st.session_state.lc_memory.save_context({"input": message}, {"output": f"Assistant Error: {error_content}"})
+                        st.session_state.last_sql_query = None # Clear context on error
+                        st.session_state.last_pruned_schema = None
+                        st.session_state.last_target_db_path = None
+                        st.session_state.last_target_db_key = None
+                        logger.info(f"handle_user_message finished (modification error). Duration: {time.time() - start_time:.2f}s")
+                        return
+                except Exception as mod_e:
+                    error_content = f"An error occurred while modifying the query: {str(mod_e)}"
+                    logger.error(f"Error during run_sql_modification call: {mod_e}", exc_info=True)
+                    st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+                    if 'lc_memory' in st.session_state:
+                        st.session_state.lc_memory.save_context({"input": message}, {"output": f"Assistant Error: {error_content}"})
+                    st.session_state.last_sql_query = None # Clear context on error
+                    st.session_state.last_pruned_schema = None
+                    st.session_state.last_target_db_path = None
+                    st.session_state.last_target_db_key = None
+                    logger.info(f"handle_user_message finished (modification error). Duration: {time.time() - start_time:.2f}s")
                     return
-            elif orchestrator_result.output.action == "assistant":
-                logger.info("Orchestrator determined this is an assistant/general help request")
-                response = orchestrator_result.output.response
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": response
-                })
-                st.session_state.lc_memory.save_context({"input": message}, {"output": response})
-                logger.info(f"handle_user_message finished (assistant). Duration: {time.time() - start_time:.2f}s")
-                return
-            elif orchestrator_result.output.action == "database_query":
-                logger.info("Orchestrator determined this is a database query")
-                # Continue with the existing database query flow
             else:
-                logger.warning(f"Unexpected action from orchestrator: {orchestrator_result.output.action}")
-        else:
-            logger.warning("No 'data' attribute in orchestrator result")
-    except Exception as e:
-        logger.error(f"Error in orchestrator processing: {str(e)}", exc_info=True)
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": f"I'm sorry, I encountered an error understanding your request. Please try rephrasing your question. Error: {str(e)}"
-        })
-        return
+                warn_msg = "I understood that as a request to modify the previous query, but I'm missing the necessary context. I'll treat it as a new query instead."
+                logger.warning("Orchestrator suggested modification, but required context is missing. Falling back to new query flow.")
+                st.session_state.chat_history.append({"role": "assistant", "content": warn_msg})
+                # Fall through to the new query flow
 
-    # --- Continue with existing DB flow (database classifier, etc) ---
-    assistant_chat_message = None
-    target_db_key = None
-    try:
-        logger.info("Step 1: Loading database metadata...")
-        db_metadata = load_db_metadata()
-        if not db_metadata:
-            logger.error("Metadata loading failed. Cannot proceed.")
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": "Sorry, I couldn't load the database configuration. Please check the application setup."
-            })
-            return # Exit
-        logger.info("Step 1: Database metadata loaded successfully.")
-        logger.info("Step 2: Identifying target database...")
-        # Pass only the current user query to the classifier agent
-        identified_key, reasoning, available_keys = await identify_target_database(message, db_metadata)
-        logger.info(f"Step 2: Database identification result - Key: {identified_key}, Reasoning: {reasoning}")
-        if identified_key == "USER_SELECTION_NEEDED":
-            logger.warning(f"Database identification requires user input. Reason: {reasoning}")
-            st.session_state.db_selection_pending = True
-            st.session_state.db_selection_reason = reasoning
-            st.session_state.pending_db_keys = available_keys
-            st.session_state.pending_user_message = message
-            st.session_state.pending_db_metadata = db_metadata
-            logger.info("Step 2: Pausing for database confirmation. State saved.")
-            # DO NOT return here - let finally block run
-        elif identified_key is None:
-            logger.error(f"Critical error during database identification. Cannot proceed. Reason: {reasoning}")
-            assistant_chat_message = {
-                "role": "assistant",
-                "content": f"Sorry, a critical error occurred while identifying the database: {reasoning}"
-            }
-            st.session_state.chat_history.append(assistant_chat_message)
-            # DO NOT return here - let finally block run
-        else:
-            target_db_key = identified_key
-            logger.info(f"Step 2: Target database confirmed as: {target_db_key}")
-            st.session_state.last_db_key = target_db_key
-            # Store the database selection reasoning for later display
-            st.session_state.db_selection_reasoning = reasoning
-            logger.info(f"Step 3: Proceeding to table selection stage for DB: {target_db_key}")
-            # Await the table selection stage directly
-            await run_table_selection_stage(message, target_db_key, db_metadata)
-            logger.info("Step 3: run_table_selection_stage finished.")
-            # run_table_selection_stage will set the state for confirmation pause
-            # DO NOT return here - let finally block run
+        # --- New Query Path ---
+        logger.info("Proceeding with NEW database query flow.")
+        try:
+            logger.info("Step 1: Loading database metadata...")
+            db_metadata = load_db_metadata()
+            if not db_metadata:
+                st.session_state.chat_history.append({"role": "assistant", "content": "Sorry, I couldn't load the database configuration."})
+                logger.info(f"handle_user_message finished (metadata load error). Duration: {time.time() - start_time:.2f}s")
+                return
 
-    except Exception as e:
-        error_msg = f"A critical error occurred during initial message processing: {str(e)}"
-        logger.exception("Critical error in handle_user_message setup:")
-        if not assistant_chat_message: # Avoid overwriting specific identification error
-            assistant_chat_message = {"role": "assistant", "content": f"Sorry, a critical internal error occurred: {str(e)}"}
-        st.session_state.chat_history.append(assistant_chat_message)
-    finally:
-        # This block runs regardless of whether the try block completed successfully,
-        # raised an exception, or paused for confirmation.
-        logger.info(f"handle_user_message finished initial stage (or error/pause). Duration: {time.time() - start_time:.2f}s")
-        # Do not return here explicitly; control flow continues to Streamlit rerun naturally
+            logger.info("Step 2: Identifying target database...")
+            async def run_identify():
+                return await identify_target_database(message, db_metadata)
+            identified_key, reasoning, available_keys = run_async_task(run_identify)
+            logger.info(f"Step 2: DB ID Result - Key: {identified_key}, Reasoning: {reasoning}")
+
+            if identified_key == "USER_SELECTION_NEEDED":
+                logger.warning(f"Database identification requires user input. Reason: {reasoning}")
+                st.session_state.db_selection_pending = True
+                st.session_state.db_selection_reason = reasoning
+                st.session_state.pending_db_keys = available_keys
+                st.session_state.pending_user_message = message
+                st.session_state.pending_db_metadata = db_metadata
+                logger.info("Step 2: Pausing for database confirmation.")
+                return
+            elif identified_key is None:
+                error_content = f"Sorry, a critical error occurred while identifying the database: {reasoning}"
+                logger.error(f"Critical error during database identification. Reason: {reasoning}")
+                st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+                return
+            else: # Database identified successfully
+                target_db_key = identified_key
+                logger.info(f"Step 2: Target database confirmed as: {target_db_key}")
+                st.session_state.last_db_key = target_db_key
+                st.session_state.last_target_db_key = target_db_key
+                st.session_state.db_selection_reasoning = reasoning
+                logger.info(f"Step 3: Proceeding to table selection stage for DB: {target_db_key}")
+                async def run_table_select():
+                    await run_table_selection_stage(message, target_db_key, db_metadata)
+                run_async_task(run_table_select)
+                logger.info("Step 3: run_table_selection_stage task submitted.")
+                return
+        except Exception as e:
+            error_msg = f"A critical error occurred during new query processing: {str(e)}"
+            logger.exception("Critical error in handle_user_message new query flow:")
+            st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+            if 'lc_memory' in st.session_state:
+                st.session_state.lc_memory.save_context({"input": message}, {"output": f"Assistant Error: {error_msg}"})
+            return
+        else: # Should not happen if orchestrator returns valid action
+            error_content = "Sorry, I received an unexpected internal instruction."
+            logger.error(f"Unexpected orchestrator action received: {orchestrator_action}")
+            st.session_state.chat_history.append({"role": "assistant", "content": error_content})
+            if 'lc_memory' in st.session_state:
+                st.session_state.lc_memory.save_context({"input": message}, {"output": "Assistant Error: Invalid orchestrator action."})
+
+        logger.info(f"handle_user_message finished stage (end of function). Duration: {time.time() - start_time:.2f}s")
+        # No return needed, main loop reruns based on state changes
+
 
 # --- Table Selection Stage ---
 async def run_table_selection_stage(
@@ -2528,148 +2539,185 @@ def main():
         # --- Table Selection UI ---
         # Show this UI ONLY if table confirmation is pending (and DB selection is NOT pending)
         elif st.session_state.get("table_confirmation_pending", False):
-            st.markdown('<div id="table-selection-anchor"></div>', unsafe_allow_html=True)
-            candidate_tables = st.session_state.get("candidate_tables", [])
-            all_tables = st.session_state.get("all_tables", [])
-            reasoning = st.session_state.get("table_agent_reasoning", "")
-            db_key = st.session_state.get("pending_target_db_key", "") # Get the key determined earlier
-            db_selection_reasoning = st.session_state.get("db_selection_reasoning", "")
+            # --- Add Robust State Check ---
+            db_metadata = st.session_state.get("pending_db_metadata")
+            db_key = st.session_state.get("pending_target_db_key")
+            all_tables = st.session_state.get("all_tables")
 
-            with st.chat_message("assistant"):
-                # Show which database was auto-selected
-                db_display_name = db_key
-                if "pending_db_metadata" in st.session_state:
-                    db_metadata = st.session_state.get("pending_db_metadata")
-                    db_entry = db_metadata.get('databases', {}).get(db_key, {})
-                    if db_entry and 'database_name' in db_entry:
-                        db_display_name = f"{db_entry['database_name']} ({db_key})"
-                
-                st.info(f"**Selected Database:** {db_display_name}", icon="🔍")
-                
-                # Show the AI's reasoning for selecting this database
-                if db_selection_reasoning:
-                    st.caption(f"**Why this database?** {db_selection_reasoning}")
-                
-                # Add a button to change the database selection
-                if st.button("Change Database", key="change_db_button"):
-                    logger.info(f"User requested to change database from: {db_key}")
-                    # Set the state for database selection UI
-                    st.session_state.db_selection_pending = True
-                    # Load the database metadata if available
-                    if "pending_db_metadata" in st.session_state:
-                        db_metadata = st.session_state.get("pending_db_metadata")
-                        st.session_state.pending_db_keys = list(db_metadata.get('databases', {}).keys())
-                    else:
-                        # Fallback in case metadata is missing
-                        logger.warning("Missing db_metadata when trying to change database")
-                        db_metadata = load_db_metadata()
-                        if db_metadata:
-                            st.session_state.pending_db_metadata = db_metadata
-                            st.session_state.pending_db_keys = list(db_metadata.get('databases', {}).keys())
-                        
-                    # Keep the user message (already stored in pending_user_message)
-                    st.session_state.db_selection_reason = "Please select a different database for your query."
-                    # Clear table confirmation to avoid conflicting states
-                    st.session_state.table_confirmation_pending = False
-                    # Rerun immediately to show the database selection UI
-                    st.rerun()
-                
-                # Adjust message based on whether candidates exist
-                if not candidate_tables and not reasoning:
-                     st.info(f"**Table Selection Required:** Please select the necessary tables from the {db_key} database for your query.", icon="ℹ️")
-                elif not candidate_tables and reasoning:
-                     st.info(f"**Table Selection Required:** {reasoning}", icon="ℹ️")
-                else: # Candidates exist
-                    st.info(f"**Table Selection Suggestion:** For the {db_key} database, I suggest using these tables: `{', '.join(candidate_tables)}`", icon="ℹ️")
-                    if reasoning:
-                        st.caption(f"Reasoning: {reasoning}")
+            if not all([db_metadata, db_key, all_tables is not None]):
+                 # State is inconsistent (likely due to clearing), skip rendering this UI
+                 logger.warning("Skipping table confirmation UI rendering due to missing state variables (possibly after clearing).")
+                 pass # Or st.empty() if needed
+            else:
+                 # --- Original Code (now safe) ---
+                 st.markdown('<div id="table-selection-anchor"></div>', unsafe_allow_html=True)
+                 candidate_tables = st.session_state.get("candidate_tables", [])
+                 # all_tables already retrieved and checked
+                 reasoning = st.session_state.get("table_agent_reasoning", "")
+                 # db_key already retrieved and checked
+                 db_selection_reasoning = st.session_state.get("db_selection_reasoning", "")
 
-                # Multiselect uses candidate_tables as default
-                selected = st.multiselect(
-                    f"Confirm or adjust the tables needed for your query:",
-                    options=all_tables,
-                    default=candidate_tables,
-                    key="table_confirm_multiselect" # Unique key
-                )
+                 with st.chat_message("assistant"):
+                     # Show which database was auto-selected
+                     db_display_name = db_key
+                     db_entry = db_metadata.get('databases', {}).get(db_key, {}) # Safe now, db_metadata is guaranteed not None
+                     if db_entry and 'database_name' in db_entry:
+                         db_display_name = f"{db_entry['database_name']} ({db_key})"
 
-                if st.button("Confirm Table Selection"):
-                    # Allow confirming even if selection is empty (user might override)
-                    logger.info(f"User confirmed table selection: {selected}")
-                    # Set the confirmed tables, clear the pending flag
-                    st.session_state.confirmed_tables = selected
-                    st.session_state.table_confirmation_pending = False
-                    # Keep other pending state (message, metadata, db_key, db_path)
-                    # Rerun immediately to trigger the continuation logic
-                    st.rerun()
+                     st.info(f"**Selected Database:** {db_display_name}", icon="🔍")
 
-            # Inject JS to scroll to the table selection anchor
-            scroll_script_table = f"""
-              <script>
-                  // Unique ID based on timestamp: {time.time()}
-                  function scrollToTableSelection() {{
-                      var element = window.parent.document.getElementById('table-selection-anchor');
-                      if (element) {{
-                          // Scroll to the anchor first
-                          element.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
-                          // --- FIX: Also scroll to the bottom after a short delay to ensure UI is fully visible ---
-                          setTimeout(function() {{
-                              window.parent.scrollTo(0, window.parent.document.body.scrollHeight);
-                          }}, 400); // Delay to allow UI to render
-                      }} else {{
-                           console.log('table selection anchor not found, retrying...');
-                          setTimeout(scrollToTableSelection, 100); // Retry if not found yet
+                     # Show the AI's reasoning for selecting this database
+                     if db_selection_reasoning:
+                         st.caption(f"**Why this database?** {db_selection_reasoning}")
+
+                     # Add a button to change the database selection
+                     if st.button("Change Database", key="change_db_button"):
+                        logger.info(f"User requested to change database from: {db_key}")
+                        # Set the state for database selection UI
+                        st.session_state.db_selection_pending = True
+                        # Load the database metadata if available or reload if missing
+                        if "pending_db_metadata" not in st.session_state or not st.session_state.pending_db_metadata:
+                             logger.warning("Reloading missing db_metadata when changing database.")
+                             _db_metadata = load_db_metadata() # Use temporary variable
+                             if _db_metadata:
+                                 st.session_state.pending_db_metadata = _db_metadata
+                                 st.session_state.pending_db_keys = list(_db_metadata.get('databases', {}).keys())
+                             else:
+                                 st.error("Failed to reload database metadata.")
+                                 st.rerun() # Prevent further execution without metadata
+                        else:
+                             # Metadata already exists, just get the keys
+                             st.session_state.pending_db_keys = list(st.session_state.pending_db_metadata.get('databases', {}).keys())
+
+                        # Keep the user message (already stored in pending_user_message)
+                        st.session_state.db_selection_reason = "Please select a different database for your query."
+                        # Clear table confirmation to avoid conflicting states
+                        st.session_state.table_confirmation_pending = False
+                        # Rerun immediately to show the database selection UI
+                        st.rerun()
+
+                     # Adjust message based on whether candidates exist
+                     if not candidate_tables and not reasoning:
+                          st.info(f"**Table Selection Required:** Please select the necessary tables from the {db_key} database for your query.", icon="ℹ️")
+                     elif not candidate_tables and reasoning:
+                          st.info(f"**Table Selection Required:** {reasoning}", icon="ℹ️")
+                     else: # Candidates exist
+                         st.info(f"**Table Selection Suggestion:** For the {db_key} database, I suggest using these tables: `{', '.join(candidate_tables)}`", icon="ℹ️")
+                         if reasoning:
+                             st.caption(f"Reasoning: {reasoning}")
+
+                     # Multiselect uses candidate_tables as default
+                     selected = st.multiselect(
+                         f"Confirm or adjust the tables needed for your query:",
+                         options=all_tables,
+                         default=candidate_tables,
+                         key="table_confirm_multiselect" # Unique key
+                     )
+
+                     if st.button("Confirm Table Selection"):
+                         # Allow confirming even if selection is empty (user might override)
+                         logger.info(f"User confirmed table selection: {selected}")
+                         # Set the confirmed tables, clear the pending flag
+                         st.session_state.confirmed_tables = selected
+                         st.session_state.table_confirmation_pending = False
+                         # Keep other pending state (message, metadata, db_key, db_path)
+                         # Rerun immediately to trigger the continuation logic
+                         st.rerun()
+
+                 # Inject JS to scroll to the table selection anchor
+                 scroll_script_table = f"""
+                  <script>
+                      // Unique ID based on timestamp: {time.time()}
+                      function scrollToTableSelection() {{
+                          var element = window.parent.document.getElementById('table-selection-anchor');
+                          if (element) {{
+                              // Scroll to the anchor first
+                              element.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+                              // --- FIX: Also scroll to the bottom after a short delay to ensure UI is fully visible ---
+                              setTimeout(function() {{
+                                  window.parent.scrollTo(0, window.parent.document.body.scrollHeight);
+                              }}, 400); // Delay to allow UI to render
+                          }} else {{
+                               console.log('table selection anchor not found, retrying...');
+                              setTimeout(scrollToTableSelection, 100); // Retry if not found yet
+                          }}
                       }}
-                  }}
-                   // Ensure running after element might be rendered
-                  window.addEventListener('load', scrollToTableSelection);
-                  // Fallback execution
-                  setTimeout(scrollToTableSelection, 200);
-              </script>
-            """
+                       // Ensure running after element might be rendered
+                      window.addEventListener('load', scrollToTableSelection);
+                      // Fallback execution
+                      setTimeout(scrollToTableSelection, 200);
+                  </script>
+                """
             components.html(scroll_script_table, height=0, width=0)
 
         # --- Combined Confirmation UI ---
         elif st.session_state.get("combined_confirmation_pending", False):
-            candidate_tables = st.session_state.get("candidate_tables", [])
-            all_tables = st.session_state.get("all_tables", [])
-            table_reasoning = st.session_state.get("table_agent_reasoning", "")
-            db_key = st.session_state.get("pending_target_db_key", "")
-            db_selection_reasoning = st.session_state.get("db_selection_reasoning", "")
-            with st.chat_message("assistant"):
-                db_display_name = db_key
-                if "pending_db_metadata" in st.session_state:
-                    db_metadata = st.session_state.get("pending_db_metadata")
-                    db_entry = db_metadata.get('databases', {}).get(db_key, {})
-                    db_display_name = f"{db_entry.get('database_name', db_key)} ({db_key})"
-                st.info(f"**Selected Database:** {db_display_name}", icon="✅")
-                if db_selection_reasoning:
-                    st.caption(f"**Reason:** {db_selection_reasoning}")
-                st.info(f"**Table Selection for {db_key}:** Please confirm or select the tables needed.", icon="ℹ️")
-                if candidate_tables:
-                    st.markdown(f"Suggested tables: `{', '.join(candidate_tables)}`")
-                    if table_reasoning:
-                        st.caption(f"Reasoning: {table_reasoning}")
-                elif table_reasoning:
-                    st.caption(f"Reasoning: {table_reasoning}")
-                selected_tables = st.multiselect(
-                    f"Confirm/adjust tables:",
-                    options=all_tables,
-                    default=candidate_tables,
-                    key="combined_table_confirm_multiselect"
-                )
-                col1, col2 = st.columns([1,3])
-                with col1:
-                    if st.button("Confirm Selections"):
-                        if not selected_tables:
-                            st.warning("Please select at least one table.")
-                        else:
-                            st.session_state.confirmed_tables = selected_tables
-                            st.rerun()
-                with col2:
-                    if st.button("Change Database Instead"):
-                        st.session_state.db_selection_pending = True
-                        st.session_state.combined_confirmation_pending = False
-                        st.rerun()
+             # --- Add Robust State Check ---
+             db_metadata = st.session_state.get("pending_db_metadata")
+             db_key = st.session_state.get("pending_target_db_key")
+             all_tables = st.session_state.get("all_tables")
+
+             if not all([db_metadata, db_key, all_tables is not None]):
+                 logger.warning("Skipping combined confirmation UI rendering due to missing state variables (possibly after clearing).")
+                 pass
+             else:
+                 # --- Original Code (now safe) ---
+                 candidate_tables = st.session_state.get("candidate_tables", [])
+                 # all_tables already checked
+                 table_reasoning = st.session_state.get("table_agent_reasoning", "")
+                 # db_key already checked
+                 db_selection_reasoning = st.session_state.get("db_selection_reasoning", "")
+                 with st.chat_message("assistant"):
+                     db_display_name = db_key
+                     # Safely get db_entry
+                     db_entry = db_metadata.get('databases', {}).get(db_key, {})
+                     db_display_name = f"{db_entry.get('database_name', db_key)} ({db_key})"
+
+                     st.info(f"**Selected Database:** {db_display_name}", icon="✅")
+                     if db_selection_reasoning:
+                         st.caption(f"**Reason:** {db_selection_reasoning}")
+                     st.info(f"**Table Selection for {db_key}:** Please confirm or select the tables needed.", icon="ℹ️")
+                     if candidate_tables:
+                         st.markdown(f"Suggested tables: `{', '.join(candidate_tables)}`")
+                         if table_reasoning:
+                             st.caption(f"Reasoning: {table_reasoning}")
+                     elif table_reasoning:
+                         st.caption(f"Reasoning: {table_reasoning}")
+
+                     selected_tables = st.multiselect(
+                         f"Confirm/adjust tables:",
+                         options=all_tables,
+                         default=candidate_tables,
+                         key="combined_table_confirm_multiselect"
+                     )
+                     col1, col2 = st.columns([1,3])
+                     with col1:
+                         if st.button("Confirm Selections"):
+                             if not selected_tables:
+                                 st.warning("Please select at least one table.")
+                             else:
+                                 st.session_state.confirmed_tables = selected_tables
+                                 # Clear combined flag after confirmation
+                                 st.session_state.combined_confirmation_pending = False
+                                 st.rerun()
+                     with col2:
+                         if st.button("Change Database Instead"):
+                             st.session_state.db_selection_pending = True
+                             st.session_state.combined_confirmation_pending = False
+                             # Ensure metadata is loaded if needed (similar to table selection logic)
+                             if "pending_db_metadata" not in st.session_state or not st.session_state.pending_db_metadata:
+                                 logger.warning("Reloading missing db_metadata when changing database from combined UI.")
+                                 _db_metadata = load_db_metadata()
+                                 if _db_metadata:
+                                     st.session_state.pending_db_metadata = _db_metadata
+                                     st.session_state.pending_db_keys = list(_db_metadata.get('databases', {}).keys())
+                                 else:
+                                     st.error("Failed to reload database metadata.")
+                                     st.rerun()
+                             else:
+                                 st.session_state.pending_db_keys = list(st.session_state.pending_db_metadata.get('databases', {}).keys())
+                             st.session_state.db_selection_reason = "Please select a different database for your query."
+                             st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True) # End chat-messages-container
 
@@ -2901,40 +2949,35 @@ def create_orchestrator_agent_blueprint():
         "output_type": OrchestratorResult, # Changed result_type to output_type
         "name": "Orchestrator Agent",
         "output_retries": 2, # Changed retries to output_retries
-        "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to:
+        "system_prompt": '''You are an orchestrator agent for a database query system. Your job is to determine the user's intent and route the request appropriately. Analyze the user query and the recent conversation history, paying close attention to the provided "Previous Query Context" (SQL, Schema Used, Result Summary).
 
-1. ASSISTANT MODE:
-   - [DEFAULT MODE] If the user message is a greeting, general question, or anything NOT related to database queries, respond with action='assistant'.
-   - You are a helpful assistant that can greet users, answer general questions, and help users query the World Bank database systems, including IBRD and IDA lending data, IFC investment data and MIGA guarantee information about investments, projects, countries, sectors, and more.
-   - If the user asks about the dataset, tables, columns, or wants to know what data is available, you have access to a tool called 'get_metadata_info' which can retrieve descriptions and details about the dataset, tables, and columns. Use this tool to answer questions about the structure, available columns, or descriptions.
-   - If the user asks for clarification about the last response, help them as long as it is related to the World Bank database systems or the outputs of the previous database query.
+**CRITICAL ANALYSIS: New Query vs. Modification**
+Before deciding the action, critically evaluate if the new user query is a modification/refinement of the *immediately preceding* database query context or a completely new request. Use all parts of the "Previous Query Context" to inform your decision.
+- **Modification Criteria:** The query asks to change, refine, filter, add/remove columns, or aggregate differently based on the data structure potentially available according to the *Previous Query Context* (even if columns were pruned). Examples: "add the 'amount' column", "also show the project ID", "filter where country is 'X'", "what's the total for these results?", "sort by date". **These ARE modifications.**
+- **New Query Criteria:** The query asks about different data concepts, different primary entities (countries, sectors, products *if different from previous*), significantly different timeframes, mentions a different database group (IBRD vs IFC vs MIGA vs IDA *if different from previous*), or has a fundamentally different goal. Example: "Now show me IBRD loans to India" after a query about "IDA projects in St. Lucia". **These are NEW queries.**
+- **Default:** If unsure after careful analysis, default to treating it as a new query (`is_modification=False`).
 
-2. DATABASE QUERY MODE:
-   - ONLY set action='database_query' if the user wants to query the database, where SQL is the appropriate response.
-   - DO NOT set action='database_query' if the user is asking for clarification about the last response or the previous database query or for a follow-up chart or visualization.
-   - Provide a brief helpful response acknowledging the query, such as "I'll search the database for that information" or "Let me find that data for you."
+**ACTIONS:**
 
+1. ASSISTANT MODE (`action='assistant'`, `is_modification=False`):
+   - If the user message is a greeting, general question about capabilities, unrelated topic, or asks for clarification about the *meaning* of previous results (without requesting data changes).
+   - Use the `get_metadata_info` tool to answer questions about database structure, available tables/columns etc.
+   - Respond helpfully.
 
-3. VISUALIZATION MODE:
-   - Set action='visualization' when the user is requesting to visualize or chart previously retrieved data.
-   - you need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
-   - When setting action='visualization', include the chart_type (e.g., "bar", "line", "pie", "scatter") in your response.
-   - Provide a brief helpful response acknowledging the visualization request, such as "I'll create a bar chart with the data."
+2. DATABASE QUERY MODE (`action='database_query'`):
+   - Set this action if the user wants to retrieve data from the database (either a new query or a modification).
+   - **Set `is_modification=True` ONLY if you confidently determined it meets the Modification Criteria above.**
+   - **Set `is_modification=False` if it meets the New Query Criteria or if you are unsure.**
+   - Provide a brief response acknowledging the request (e.g., "Okay, I'll run that query," or "Okay, I'll modify the previous query").
 
-4. PYTHON AGENT USAGE:
-   - You have access to a Python agent tool for data manipulation and visualization (e.g., using pandas, numpy, or plotting the last DataFrame as a chart).
-   - You need to compare the user query to the previous dataframe in context to determine if it is a new SQL query or a follow-up chart or visualization related to the previous query.
-   - Use this tool when the user makes a follow-up request to visualize, plot, or chart the previous results, or requests data manipulation in Python.
-   - Call the Python agent with the requested operation and any relevant user context.
-   - If the tool returns a successful result, respond to the user with the message and chart type or code from the tool's output. If there is an error, inform the user accordingly.
-   - Only use this tool if there is previous data available to manipulate or visualize.
-   - IF you determine a query to be a follow-up chart or visualization, set action='visualization' and include the chart type in the response.
+3. VISUALIZATION MODE (`action='visualization'`, `is_modification=False`):
+   - Set this action ONLY when the user explicitly asks to visualize, plot, or chart the *results of the immediately preceding query*.
+   - Compare the user query to the previous dataframe/query context. Only proceed if the request clearly refers to visualizing the existing data.
+   - If the visualization request requires different data than the previous query, set `action='database_query'` and `is_modification=False`.
+   - Include the `chart_type` (e.g., "bar", "line") if identifiable.
+   - Provide a brief response (e.g., "Okay, creating a chart...").
 
-5. CONVERSATION MANAGEMENT:
-   - Use the conversation history to maintain context.
-   - If a follow-up question refers to previous results, treat it as a database query, Python data manipulation, or visualization request or clarification about the last response.
-
-Respond ONLY with the structured OrchestratorResult, including the appropriate action type and chart_type if relevant.''',
+Respond ONLY with the structured OrchestratorResult, including the `is_modification` field.''',
         "tools": [get_metadata_info],
     }
 
