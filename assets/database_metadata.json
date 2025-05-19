@@ -21,11 +21,14 @@
                         },
                         "country_economy_code": {
                             "type": "TEXT",
-                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
+                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code.",
+                            "example": "IN"
                         },
                         "country_economy": {
                             "type": "TEXT",
-                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code."
+                            "description": "Country / Economy Code according to the World Bank country / economy list. Might be different from the ISO country / economy code.",
+                            "query_notes": "Use this as your primary country column unless specified otherwise.",
+                            "example": "India"
                         },
                         "borrower": {
                             "type": "TEXT",
@@ -161,7 +164,9 @@
                         },
                         "country_economy": {
                             "type": "TEXT",
-                            "description": "Country / Economy to which loan has been issued. Loans to the IFC are included under the country / economy “World”."
+                            "description": "Country / Economy to which loan has been issued. Loans to the IFC are included under the country / economy “World”.",
+                            "query_notes": "Use this as your primary country column unless specified otherwise."
+
                         },
                         "borrower": {
                             "type": "TEXT",

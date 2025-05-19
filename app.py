@@ -437,7 +437,7 @@ def create_column_prune_agent_blueprint():
         "output_type": PrunedSchemaResult, # Changed result_type to output_type
         "name": "Column Pruning Agent",
         "output_retries": 2, # Changed retries to output_retries
-        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Identify the intent of the user query and focus on identifying relevant columns needed for SQL query):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned for SELECT statement, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project name, project id and amount.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns needed to generate the correct SQL query.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nYour only task is SCHEMA PRUNING.\n""",
+        "system_prompt": """You are an expert data analyst assistant. Your task is to prune the schema of a database to include only essential columns for a given user query.\n\nIMPORTANT: The schema of the database will be provided at the beginning of each user message as a JSON object. Use this schema information to understand the database structure and generate an accurate pruned schema JSON.\n\nWhen deciding which columns to keep, always check the \"query_notes\" field in the column metadata (if present). Always  Use any instructions or hints in \"query_notes\" to make more effective pruning decisions.\n\nWhen you output the pruned schema, include all metadata fields for each column (type, description, query_notes, etc.) in the JSON you return.\n\nCRITICAL RULES FOR SCHEMA PRUNING (Identify the intent of the user query and focus on identifying relevant columns needed for SQL query):\n1. Identify which columns are needed based on the user's query (e.g., columns mentioned for SELECT statement, columns needed for filtering, aggregation, or grouping).\n2. Pay attention to specific column names requested or implied by the query.\n3. Use the query_notes field to guide your pruning.\n4. Include key identifying columns that would be needed to make sense of the query like project name, project id and at least 1 relevant amount column.\n\nYOUR GOAL is to output a concise schema JSON containing ONLY the necessary tables and columns needed to generate the correct SQL query.\n\nRESPONSE STRUCTURE:\n1. Review the full schema provided.\n2. Analyze the user query to determine essential columns.\n3. Generate the pruned_schema_string as a JSON string containing only the required columns, with all their metadata fields.\n4. Provide a brief explanation of why these columns were kept.\n5. Format your final response using the 'PrunedSchemaResult' structure.\n\nYour only task is SCHEMA PRUNING.\n""",
         "tools": [get_metadata_info],
     }
 
@@ -663,7 +663,7 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
         except Exception as config_err:
             logger.error(f"Failed to configure GenAI SDK for classification: {config_err}", exc_info=True)
             return None, f"Internal Error: Failed to configure AI Service ({config_err}).", []
-        gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-1.5-flash")
+        gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-2.0-flash")
         local_llm = GeminiModel(model_name=gemini_model_name)
         from pydantic_ai import Agent
         # Define a new result model for name-based output
@@ -762,7 +762,7 @@ async def handle_user_message(message: str) -> None:
             logger.error(f"Failed to configure GenAI SDK for orchestrator: {config_err}", exc_info=True)
             raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-1.5-flash")
+        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.5-flash-preview-04-17")
         local_llm = GeminiModel(model_name=gemini_model_name)
         
         # Get the config directly from the blueprint function
@@ -1049,7 +1049,7 @@ Based *only* on the user query and the table descriptions, which of the listed t
                 logger.error(f"Failed to configure GenAI SDK for table selection: {config_err}", exc_info=True)
                 raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_TABLE_SELECTION_MODEL", "gemini-1.5-pro")
+            gemini_model_name = st.secrets.get("GEMINI_TABLE_SELECTION_MODEL", "gemini-2.0-flash")
             local_llm = GeminiModel(model_name=gemini_model_name)
             logger.info(f"Instantiated GeminiModel: {gemini_model_name} for table selection.")
             table_selection_agent_blueprint = create_table_selection_agent_blueprint()
@@ -1144,6 +1144,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
     
     try:
         db_key = st.session_state.get('last_chartable_db_key', 'unknown')
+        table_names = st.session_state.get('last_chartable_table_names', []) # Get table names
         df = st.session_state.last_chartable_data
         schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
         
@@ -1185,21 +1186,24 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
                     "role": "assistant",
                     "content": response,
                     "streamlit_chart": streamlit_chart,
-                    "db_key": db_key
+                    "db_key": db_key,
+                    "table_names": table_names, # Add table names here
                 })
             else:
                 logger.warning("Visualization agent returned None")
                 st.session_state.chat_history.append({
                     "role": "assistant",
                     "content": "I couldn't create a visualization for this data.",
-                    "db_key": db_key
+                    "db_key": db_key,
+                    "table_names": table_names, # Add table names here
                 })
         except Exception as e:
             logger.error(f"Error in visualization agent during follow-up: {str(e)}", exc_info=True)
             st.session_state.chat_history.append({
                 "role": "assistant", 
                 "content": f"Error creating visualization: {str(e)}",
-                "db_key": db_key
+                "db_key": db_key,
+                "table_names": table_names, # Add table names here
             })
     except Exception as e:
         logger.error(f"Error in handle_follow_up_chart: {str(e)}", exc_info=True)
@@ -1207,7 +1211,8 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         st.session_state.chat_history.append({
             "role": "assistant", 
             "content": f"I'm sorry, I couldn't create the chart due to an error: {str(e)}",
-            "db_key": db_key
+            "db_key": db_key,
+            "table_names": table_names, # Add table names here
         })
 
 
@@ -1492,9 +1497,11 @@ User Request: {user_message}'''
                                 if not has_empty_data:
                                     st.session_state.last_chartable_data = sql_results_df
                                     st.session_state.last_chartable_db_key = target_db_key
+                                    st.session_state.last_chartable_table_names = selected_tables # Store table names
                                     st.session_state.last_sql_query = sql_query
                                     st.session_state.last_pruned_schema = schema_to_use
                                     st.session_state.last_target_db_path = target_db_path
+                                    st.session_state.last_table_names = selected_tables # Store table names
                                     logger.info(f"Stored DataFrame with usable data in last_chartable_data.")
                                 else:
                                     # Empty content DataFrame
@@ -1505,6 +1512,7 @@ User Request: {user_message}'''
                                     st.session_state.last_sql_query = sql_query
                                     st.session_state.last_pruned_schema = schema_to_use
                                     st.session_state.last_target_db_path = target_db_path
+                                    st.session_state.last_table_names = None
                             else:
                                 # Empty DataFrame
                                 logger.warning("Not storing empty DataFrame in last_chartable_data.")
@@ -1514,6 +1522,7 @@ User Request: {user_message}'''
                                 st.session_state.last_sql_query = sql_query
                                 st.session_state.last_pruned_schema = schema_to_use
                                 st.session_state.last_target_db_path = target_db_path
+                                st.session_state.last_table_names = None
                             
                             logger.info(f"Stored query context for potential modification: DB='{target_db_key}', Path='{target_db_path}'.")
                         except Exception as df_e:
@@ -1522,24 +1531,29 @@ User Request: {user_message}'''
                             sql_results_df = pd.DataFrame() # Ensure empty df
                             st.session_state.last_chartable_data = None # Clear chartable data
                             st.session_state.last_chartable_db_key = None
+                            st.session_state.last_chartable_table_names = None
                             st.session_state.last_sql_query = None
                             st.session_state.last_pruned_schema = None
                             st.session_state.last_target_db_path = None
+                            st.session_state.last_table_names = None
                     else:
                         logger.info("SQL execution successful, 0 rows returned.")
                         sql_info["results"] = []
                         sql_results_df = pd.DataFrame() # Empty df
                         st.session_state.last_chartable_data = None # Clear chartable data
                         st.session_state.last_chartable_db_key = None
+                        st.session_state.last_chartable_table_names = None
                         st.session_state.last_sql_query = None
                         st.session_state.last_pruned_schema = None
                         st.session_state.last_target_db_path = None
+                        st.session_state.last_table_names = None
                 else: # Should not happen if execute_sql returns correctly
                     sql_info["error"] = "Unexpected result type from SQL execution."
                     logger.error(f"{sql_info['error']} Type: {type(sql_execution_result)}")
                     sql_results_df = pd.DataFrame() # Empty df
                     st.session_state.last_chartable_data = None # Clear chartable data
                     st.session_state.last_chartable_db_key = None
+                    st.session_state.last_chartable_table_names = None
 
                 # Add sql_info block to the message dictionary
                 base_assistant_message["sql_result"] = sql_info
@@ -1685,7 +1699,8 @@ User Request: {user_message}'''
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": "I couldn't create a visualization because the query returned no data.",
-                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown')
+                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown'),
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
@@ -1697,7 +1712,8 @@ User Request: {user_message}'''
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": "I couldn't create a visualization because the query returned only empty values.",
-                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown')
+                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown'),
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
@@ -1744,7 +1760,8 @@ User Request: {user_message}'''
                             "role": "assistant",
                             "content": visualization_result.description,
                             "streamlit_chart": streamlit_chart,
-                            "db_key": db_key
+                            "db_key": db_key,
+                            "table_names": st.session_state.get('last_chartable_table_names', [])
                         })
                         logger.info(f"Created follow-up visualization: {visualization_result.chart_type} chart with x={visualization_result.x_column}, y={visualization_result.y_column}")
                     else:
@@ -1752,14 +1769,16 @@ User Request: {user_message}'''
                         st.session_state.chat_history.append({
                             "role": "assistant",
                             "content": "I couldn't create a visualization for this data.",
-                            "db_key": db_key
+                            "db_key": db_key,
+                            "table_names": st.session_state.get('last_chartable_table_names', [])
                         })
                 except Exception as e:
                     logger.error(f"Error in visualization agent for combined intent: {str(e)}", exc_info=True)
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": f"Error creating visualization: {str(e)}",
-                        "db_key": db_key
+                        "db_key": db_key,
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                 
                 # Clear the combined intent flag
@@ -1867,7 +1886,8 @@ async def continue_after_table_confirmation():
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": "I couldn't create a visualization because the query returned no data.",
-                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown')
+                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown'),
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
@@ -1879,7 +1899,8 @@ async def continue_after_table_confirmation():
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": "I couldn't create a visualization because the query returned only empty values.",
-                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown')
+                        "db_key": st.session_state.get('last_chartable_db_key', 'unknown'),
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                     # Clear the combined intent flag
                     del st.session_state['combined_sql_visualization']
@@ -1926,7 +1947,8 @@ async def continue_after_table_confirmation():
                             "role": "assistant",
                             "content": visualization_result.description,
                             "streamlit_chart": streamlit_chart,
-                            "db_key": db_key
+                            "db_key": db_key,
+                            "table_names": st.session_state.get('last_chartable_table_names', [])
                         })
                         logger.info(f"Created follow-up visualization: {visualization_result.chart_type} chart with x={visualization_result.x_column}, y={visualization_result.y_column}")
                     else:
@@ -1934,14 +1956,16 @@ async def continue_after_table_confirmation():
                         st.session_state.chat_history.append({
                             "role": "assistant",
                             "content": "I couldn't create a visualization for this data.",
-                            "db_key": db_key
+                            "db_key": db_key,
+                            "table_names": st.session_state.get('last_chartable_table_names', [])
                         })
                 except Exception as e:
                     logger.error(f"Error in visualization agent for combined intent: {str(e)}", exc_info=True)
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": f"Error creating visualization: {str(e)}",
-                        "db_key": db_key
+                        "db_key": db_key,
+                        "table_names": st.session_state.get('last_chartable_table_names', [])
                     })
                 
                 # Clear the combined intent flag
@@ -2336,7 +2360,7 @@ def main():
         <p>Example Questions:</p>
         <ul>
             <li>"Get me the top 10 countries with the highest count of advisory projects approved in 2024"</li>
-            <li>"Show me the sum of IBRD loans to India approved since 2020 per year"</li>
+            <li>"Show me the sum of IBRD projects in India approved since 2020 per year"</li>
             <li>"Compare the average IFC investment size for 'Loan' products between Nepal and Bhutan."</li>
             <li>"What is the total gross guarantee exposure for MIGA in the Tourism sector in Senegal?"</li>
             <li>"Give me the top 10 IFC equity investments from China"</li>
@@ -2981,6 +3005,7 @@ If the prompt includes a `Previous SQL Query` and a `User Modification` instruct
     - You MUST explicitly suggest the chart type (e.g., "line chart", "bar chart") in the `text_message`.
 7. **Explain** the changes made in the `text_message`.
 8. Return the *new* query in the `sql_result` field and any *preparation-only* Python code in `python_result`.
+9. Include key identifying columns in your SELECT statement that would be needed to make sense of the query like project name, project id and at least 1 relevant amount column.
 
 --- NEW QUERY REQUESTS ---
 If no `Previous SQL Query` is provided, treat it as a new request and follow the rules below.
@@ -2992,7 +3017,7 @@ CRITICAL RULES FOR SQL GENERATION:
 4. GROUPING: When a question mentions \"per\" some field (e.g., \"per product line\"), this requires a GROUP BY clause for that field.
 5. SUM FOR TOTALS: Numerical fields asking for totals must use SUM() in your query. Ensure you select the correct column (e.g., \"IFC investment for Loan(Million USD)\" for loan sizes).
 6. SECURITY: ONLY generate SELECT queries. NEVER generate SQL statements that modify the database (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, etc.).
-7. INCLUDE AT LEAST 3 COLUMNS: Include columns that would be needed to make sense of the query like project name and number. never give only one column in the SELECT query, **always include at least 3 columns**.
+7. INCLUDE AT LEAST 3 COLUMNS: Include columns in your SELECT statement that would be needed to make sense of the query like project name and number.
 8. QUERY NOTES: *IMPORTANT* Pay attention to the query_notes in the metadata for each column. These are important instructions from the data stewards that you must follow. Use them to determine the correct column to use for the query.
 
 PYTHON AGENT TOOL:
@@ -3259,8 +3284,7 @@ async def run_sql_modification(
     logger.info(f"Running SQL modification for DB: {last_target_db_key}, Path: {last_target_db_path}")
     deps = None
     final_assistant_message_dict = None
-    # Retrieve selected_tables from session state for modification context
-    selected_tables = st.session_state.get("last_table_names", [])
+    table_names = st.session_state.get("last_table_names", []) # Get table names for this modification context
 
     try:
         logger.info("Instantiating LLM/Agent for SQL modification...")
@@ -3344,7 +3368,7 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
             response: QueryResponse = agent_run_result.output
             logger.info("Modification agent response has expected QueryResponse structure.")
             # Start building the final message dict
-            base_assistant_message = {"role": "assistant", "content": response.text_message, "db_key": last_target_db_key, "table_names": selected_tables}
+            base_assistant_message = {"role": "assistant", "content": response.text_message, "db_key": last_target_db_key, "table_names": table_names}
             sql_results_df = None
             sql_info = {}
             new_sql_query = None # Store the newly generated query
@@ -3373,10 +3397,12 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
                         sql_info["columns"] = list(sql_results_df.columns)
                         st.session_state.last_chartable_data = sql_results_df # Update chartable data
                         st.session_state.last_chartable_db_key = last_target_db_key
+                        st.session_state.last_chartable_table_names = table_names # Update chartable table names
                         # UPDATE context with the NEW successful query
                         st.session_state.last_sql_query = new_sql_query
                         st.session_state.last_pruned_schema = last_pruned_schema # Keep the same schema
                         st.session_state.last_target_db_path = last_target_db_path # Keep the same path
+                        st.session_state.last_table_names = table_names # Store table names
                         logger.info("Updated context after successful modification.")
                     else:
                         # Query ran successfully, but returned 0 rows
@@ -3384,10 +3410,12 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
                         sql_results_df = pd.DataFrame()
                         st.session_state.last_chartable_data = None # Clear chartable data
                         st.session_state.last_chartable_db_key = None
+                        st.session_state.last_chartable_table_names = None
                         # UPDATE context with the NEW successful query (even if 0 results)
                         st.session_state.last_sql_query = new_sql_query 
                         st.session_state.last_pruned_schema = last_pruned_schema
                         st.session_state.last_target_db_path = last_target_db_path
+                        st.session_state.last_table_names = table_names # Store table names even if 0 results
                         logger.info("Updated context after successful modification (0 results).")
                 else:
                     # Handle unexpected result type from execute_sql
@@ -3395,6 +3423,7 @@ Modify the 'Previous SQL Query' based on the 'User Modification Request', but us
                     sql_results_df = pd.DataFrame()
                     st.session_state.last_chartable_data = None
                     st.session_state.last_chartable_db_key = None
+                    st.session_state.last_chartable_table_names = None
                     # Don't update last_sql_query on error
 
                 base_assistant_message["sql_result"] = sql_info
