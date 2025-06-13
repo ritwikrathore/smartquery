@@ -16,7 +16,6 @@ import logging
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.usage import Usage, UsageLimits
-from pydantic_ai.models.gemini import GeminiModel
 # from pydantic_ai.format_as_xml import format_as_xml # Not used directly it seems
 import plotly.express as px
 import nest_asyncio
@@ -46,30 +45,28 @@ async def log_agent_run(agent, prompt, *args, **kwargs):
     logger.debug(f"[AGENT RESULT] {getattr(agent, 'name', str(agent))} result: {result}")
     return result
 # --- Google Generative AI Import and Configuration ---
-try:
-    import google.generativeai as genai
-    logger.info("Successfully imported google.generativeai.")
-except ImportError:
-    logger.error("Google Generative AI SDK not installed.", exc_info=True)
-    st.error("Google Generative AI SDK not installed. Please run `pip install google-generativeai`.")
-    st.stop()
-
-# Load API Key (Essential)
-google_api_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
-if not google_api_key:
-    logger.error("🔴 GOOGLE_API_KEY not found in secrets.toml or environment variables!")
-    st.error("🔴 GOOGLE_API_KEY not found. Please configure it in Streamlit secrets or environment variables.")
+# Gemini/Google logic removed, replaced with OpenAI
+from pydantic_ai.models.openai import OpenAIModel
+openai_api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+if not openai_api_key:
+    st.error("🔴 OPENAI_API_KEY not found. Please configure it in Streamlit secrets or environment variables.")
     st.stop()
 else:
-    logger.info("Google API Key loaded successfully.")
-    # Configure the SDK globally once here is generally okay, but we'll re-confirm in async functions
+    logger.info("OpenAI API Key loaded successfully.")
+    # Optional: Check if the OpenAI API key is valid
     try:
-        genai.configure(api_key=google_api_key)
-        logger.info("Globally configured Google Generative AI SDK.")
+        import openai
+        openai_client = openai.OpenAI(api_key=openai_api_key)
+        # Try a simple API call to verify the key (list models)
+        openai_client.models.list()
+        logger.info("OpenAI API key verified with a test API call.")
+    except ImportError:
+        logger.warning("openai package not installed; skipping API key verification.")
     except Exception as config_err:
-        logger.error(f"🔴 Failed initial global GenAI SDK configuration: {config_err}", exc_info=True)
-        st.error(f"Failed initial AI configuration: {config_err}")
-        # Don't stop here, maybe it works when configured locally later
+        logger.error(f"🔴 Failed to verify OpenAI API key: {config_err}", exc_info=True)
+        st.error(f"Failed to verify OpenAI API key: {config_err}")
+        st.stop()
+
 
 
 # --- Configuration and Dependencies ---
@@ -655,16 +652,8 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
     logger.debug(f"Prompt:\n{classification_prompt}")
     logger.info("--------------------------------------------")
     try:
-        global google_api_key
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=google_api_key)
-            logger.info("Configured GenAI SDK within identify_target_database.")
-        except Exception as config_err:
-            logger.error(f"Failed to configure GenAI SDK for classification: {config_err}", exc_info=True)
-            return None, f"Internal Error: Failed to configure AI Service ({config_err}).", []
-        gemini_model_name = st.secrets.get("GEMINI_CLASSIFICATION_MODEL", "gemini-2.0-flash")
-        local_llm = GeminiModel(model_name=gemini_model_name)
+
+        local_llm = OpenAIModel(model_name="gpt-4.1-mini")
         from pydantic_ai import Agent
         # Define a new result model for name-based output
         class NameBasedClassification(BaseModel):
@@ -693,7 +682,6 @@ async def identify_target_database(user_query: str, metadata: Dict) -> Tuple[Opt
                 return canonical_key, reasoning, valid_keys
             else:
                 logger.warning(f"LLM returned a database name '{db_name}' that is not present in the current metadata. Triggering ModelRetry.")
-                from pydantic_ai import ModelRetry
                 raise ModelRetry(f"The LLM returned a database name '{db_name}' that is not present in the current metadata. Please select one of: {db_names_str}.") # Use db_names_str here
         else:
             logger.error(f"Classification call returned unexpected structure: {classification_result}. Triggering user selection.")
@@ -754,16 +742,9 @@ async def handle_user_message(message: str) -> None:
             logger.info("Skipping duplicate user message append to chat history.")
 
         short_context = get_recent_turns_from_memory(st.session_state.lc_memory, n=3)
-        global google_api_key
-        import google.generativeai as genai
-        try:
-            genai.configure(api_key=google_api_key)
-        except Exception as config_err:
-            logger.error(f"Failed to configure GenAI SDK for orchestrator: {config_err}", exc_info=True)
-            raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-        gemini_model_name = st.secrets.get("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.5-flash-preview-04-17")
-        local_llm = GeminiModel(model_name=gemini_model_name)
+
+        local_llm = OpenAIModel(model_name="gpt-4.1")
         
         # Get the config directly from the blueprint function
         orchestrator_config = create_orchestrator_agent_blueprint() 
@@ -1039,19 +1020,9 @@ Based *only* on the user query and the table descriptions, which of the listed t
         try:
             logger.info("Calling Table Selection Agent...")
             logger.info("Instantiating LLM/Agent for table selection...")
-            global google_api_key
-            import google.generativeai as genai
-            try:
-                # Configure just before use
-                genai.configure(api_key=google_api_key)
-                logger.info("Configured GenAI SDK within table selection.")
-            except Exception as config_err:
-                logger.error(f"Failed to configure GenAI SDK for table selection: {config_err}", exc_info=True)
-                raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_TABLE_SELECTION_MODEL", "gemini-2.0-flash")
-            local_llm = GeminiModel(model_name=gemini_model_name)
-            logger.info(f"Instantiated GeminiModel: {gemini_model_name} for table selection.")
+            local_llm = OpenAIModel(model_name="gpt-4.1-mini")
+            logger.info(f"Instantiated OpenAIModel: {local_llm} for table selection.")
             table_selection_agent_blueprint = create_table_selection_agent_blueprint()
             agent_instance = Agent(local_llm, **table_selection_agent_blueprint)
             logger.info("Table selection agent created locally.")
@@ -1149,7 +1120,7 @@ async def handle_follow_up_chart(message: str, chart_type: str = "bar"):
         schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
         
         # Create an agent context
-        local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
+        local_llm = OpenAIModel(model_name="gpt-4.1")
         deps = AgentDependencies.create().with_db(db_key)
         context = RunContext(deps=deps, model=local_llm, usage=DEFAULT_USAGE_LIMITS, prompt=message)
         
@@ -1258,17 +1229,8 @@ Full Schema for Relevant Tables:
 
 Based *only* on the user query and the full schema provided, prune the schema string to include only essential columns. Output the pruned schema string and explanation.'''
         try:
-            global google_api_key
-            try:
-                # Configure GenAI just before use
-                genai.configure(api_key=google_api_key)
-                logger.info("Configured GenAI SDK within column pruning.")
-            except Exception as config_err:
-                logger.error(f"Failed to configure GenAI SDK for column pruning: {config_err}", exc_info=True)
-                raise RuntimeError(f"Internal Error: Failed to configure AI Service ({config_err}).") from config_err
 
-            gemini_model_name = st.secrets.get("GEMINI_PRUNING_MODEL", "gemini-2.0-flash")
-            local_llm_prune = GeminiModel(model_name=gemini_model_name)
+            local_llm_prune = OpenAIModel(model_name="gpt-4.1-mini")
             agent_config_prune = create_column_prune_agent_blueprint()
             agent_instance_prune = Agent(local_llm_prune, **agent_config_prune)
             
@@ -1310,15 +1272,11 @@ Based *only* on the user query and the full schema provided, prune the schema st
         # (No spinner here)
         logger.info("Instantiating LLM/Agent for post-confirmation query...")
         try:
-            # Configure GenAI just before use
-            genai.configure(api_key=google_api_key)
-            logger.info("Configured GenAI SDK within post-confirmation flow.")
+            local_llm = OpenAIModel(model_name="gpt-4.1")
         except Exception as config_err:
-            logger.error(f"Failed to configure GenAI SDK post-confirmation: {config_err}", exc_info=True)
+            logger.error(f"Failed to configure OpenAI SDK post-confirmation: {config_err}", exc_info=True)
             return {"role": "assistant", "content": f"Internal Error: Failed to configure AI Service ({config_err})."}
 
-        gemini_model_name = st.secrets.get("GEMINI_QUERY_MODEL", "gemini-2.5-flash-preview-04-17") # Changed default to flash for consistency
-        local_llm = GeminiModel(model_name=gemini_model_name)
         agent_config_bp = create_query_agent_blueprint()
         # Instantiate the agent
         local_query_agent = Agent(
@@ -1728,7 +1686,7 @@ User Request: {user_message}'''
                 schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
                 
                 # Create a context for the visualization agent
-                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
+                local_llm = OpenAIModel(model_name="gpt-4.1")
                 deps = AgentDependencies.create().with_db(db_key)
                 context = RunContext(deps=deps, model=local_llm, usage=DEFAULT_USAGE_LIMITS, prompt=user_message)
                 
@@ -1915,7 +1873,7 @@ async def continue_after_table_confirmation():
                 schema = st.session_state.last_pruned_schema if hasattr(st.session_state, 'last_pruned_schema') else ""
                 
                 # Create a context for the visualization agent
-                local_llm = GeminiModel(model_name=st.secrets.get("GEMINI_VIZ_MODEL", "gemini-2.0-flash"))
+                local_llm = OpenAIModel(model_name="gpt-4.1")
                 deps = AgentDependencies.create().with_db(db_key)
                 context = RunContext(deps=deps, model=local_llm, usage=DEFAULT_USAGE_LIMITS, prompt=user_message)
                 
@@ -2231,7 +2189,7 @@ def main():
     # --- Main Page Content ---
     # ... (HTML/CSS for title, features, examples, clear button remain the same) ...
     st.markdown('<h1 style="text-align: center;"><span style="color: #00ade4;">SmartQuery</span></h1>', unsafe_allow_html=True)
-    st.markdown("<h5 style='text-align: center; color: #555;'>AI-Powered Database Analysis with Google Gemini</h5>", unsafe_allow_html=True)
+    st.markdown("<h5 style='text-align: center; color: #555;'>AI-Powered Database Analysis</h5>", unsafe_allow_html=True)
     st.markdown("""
     <style>
         /* Main chat container adjustments */
@@ -3288,17 +3246,8 @@ async def run_sql_modification(
 
     try:
         logger.info("Instantiating LLM/Agent for SQL modification...")
-        global google_api_key
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=google_api_key)
-            logger.info("Configured GenAI SDK within run_sql_modification.")
-        except Exception as config_err:
-            logger.error(f"Failed to configure GenAI SDK for modification: {config_err}", exc_info=True)
-            return {"role": "assistant", "content": f"Internal Error: Failed to configure AI Service ({config_err})."}
 
-        gemini_model_name = st.secrets.get("GEMINI_QUERY_MODEL", "gemini-2.5-flash-preview-04-17")
-        local_llm = GeminiModel(model_name=gemini_model_name)
+        local_llm = OpenAIModel(model_name="gpt-4.1")
         agent_config_bp = create_query_agent_blueprint()
         local_query_agent = Agent(
             local_llm,
